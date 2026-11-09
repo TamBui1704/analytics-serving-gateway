@@ -1,0 +1,28 @@
+# k8s/api-service.yaml
+# Service: stable internal DNS name + load-balance across Pods.
+#
+# Type: ClusterIP (default) — only reachable inside the cluster.
+# The Ingress controller (NGINX) routes external traffic to this Service.
+#
+# Concepts:
+#   ClusterIP  → internal only (this file)
+#   NodePort   → exposes on node IP:port (useful for quick local testing)
+#   LoadBalancer → creates cloud load balancer (GKE, EKS, etc.)
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-api-svc
+  namespace: analytics
+  labels:
+    app: analytics-api
+spec:
+  type: ClusterIP
+  selector:
+    app: analytics-api          # Routes to Pods with this label
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80                  # Service port (what Ingress calls)
+      targetPort: 8000          # Container port (what FastAPI listens on)
+

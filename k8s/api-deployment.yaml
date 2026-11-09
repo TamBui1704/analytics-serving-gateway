@@ -1,0 +1,88 @@
+# k8s/api-deployment.yaml
+# Deployment: manages the FastAPI Pod replicas.
+# Key concepts demonstrated:
+#   - replicas: horizontal scaling
+#   - resources: CPU/memory requests & limits
+#   - livenessProbe / readinessProbe: health management
+#   - envFrom secretRef: inject K8s Secret as env vars
+#   - rollingUpdate strategy: zero-downtime deploys
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-api
+  namespace: analytics
+  labels:
+    app: analytics-api
+    version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: analytics-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1          # Allow 1 extra Pod during update
+      maxUnavailable: 0    # Keep all current Pods up during update
+  template:
+    metadata:
+      labels:
+        app: analytics-api
+        version: "1.0.0"
+    spec:
+      # ── Security context ─────────────────────────────────────────────────────
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+
+      containers:
+        - name: api
+          # Image built & pushed by GitHub Actions CI/CD
+          # Format: ghcr.io/<GITHUB_USER>/analytics-serving-gateway:<tag>
+          image: ghcr.io/YOUR_GITHUB_USER/analytics-serving-gateway:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+
+          # ── Inject secrets as environment variables ─────────────────────────
+          envFrom:
+            - secretRef:
+                name: analytics-gateway-secret
+          env:
+            - name: CLICKHOUSE_PORT
+              value: "8123"
+            - name: CLICKHOUSE_USER
+              value: "default"
+            - name: CLICKHOUSE_DB
+              value: "analytics"
+
+          # ── Resource limits (tune for your machine) ─────────────────────────
+          resources:
+            requests:
+              cpu: "100m"      # 0.1 CPU core
+              memory: "128Mi"
+            limits:
+              cpu: "500m"      # 0.5 CPU core
+              memory: "256Mi"
+
+          # ── Liveness probe: restart Pod if app hangs ────────────────────────
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+
+          # ── Readiness probe: only send traffic when DB is reachable ─────────
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+

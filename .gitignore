@@ -1,0 +1,44 @@
+# .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Environment files (NEVER commit these)
+.env
+.env.*
+!.env.example
+
+# Docker
+*.tar
+
+# Kubernetes sensitive files
+kubeconfig
+*.kubeconfig
+k8s/secret.yaml   # Remove from ignore if you use sealed secrets
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+logs/
+

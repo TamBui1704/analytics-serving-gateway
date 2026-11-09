@@ -1,0 +1,36 @@
+# k8s/hpa.yaml
+# HorizontalPodAutoscaler — auto-scale Pods based on CPU usage.
+#
+# Concept:
+#   HPA watches Pod metrics via metrics-server.
+#   If average CPU > 60%, it adds more Pod replicas (up to maxReplicas).
+#   If CPU drops, it scales back down (after cooldown period).
+#
+# Enable metrics-server in Minikube:
+#   minikube addons enable metrics-server
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: analytics-api-hpa
+  namespace: analytics
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: analytics-api
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60    # Scale up when avg CPU > 60%
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30    # Wait 30s before scaling up again
+    scaleDown:
+      stabilizationWindowSeconds: 120   # Wait 2min before scaling down (avoid flapping)
+

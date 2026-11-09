@@ -1,0 +1,11 @@
+# k8s/namespace.yaml
+# Create a dedicated namespace to isolate all project resources.
+# Apply: kubectl apply -f k8s/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: analytics
+  labels:
+    app.kubernetes.io/managed-by: kubectl
+    project: analytics-serving-gateway
+
