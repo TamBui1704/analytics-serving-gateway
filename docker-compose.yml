@@ -1,35 +1,82 @@
-# docker-compose.yml — Local data layer (ClickHouse)
-# Run: docker compose up -d
-# ClickHouse HTTP API available at http://localhost:8123
-
-version: "3.9"
+# ============================================================
+# DOCKER COMPOSE DÀNH CHO NẤC 1 & NẤC 2
+# ============================================================
+# Cụm 3 container chạy trên cùng 1 mạng ảo (analytics_net):
+#
+#   Client (Postman/curl)
+#           │
+#           ▼ (Cổng 8080 - Nấc 2: API Gateway)
+#    [ api_gateway (NGINX) ]  ← Chặn API Key & Rate Limit (5 r/s)
+#           │
+#           ▼ (Cổng 8000 nội bộ)
+#    [ api_service (FastAPI) ] ← Xử lý logic, trả về JSON
+#           │
+#           ▼ (Cổng 8123 nội bộ)
+#    [ clickhouse (OLAP DB) ]  ← Lưu trữ & tính toán 50.000 dòng orders
+# ============================================================
 
 services:
+  # ── 1. DATA LAYER (ClickHouse) ──────────────────────────────
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
     container_name: analytics_clickhouse
     ports:
-      - "8123:8123"   # HTTP interface (used by clickhouse-connect)
-      - "9000:9000"   # Native protocol (optional, for ClickHouse CLI)
+      - "8123:8123"   # Mở cổng HTTP để truy vấn trực tiếp khi cần debug
     environment:
       CLICKHOUSE_DB: analytics
       CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""   # Empty password for local dev
+      CLICKHOUSE_PASSWORD: ""
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./scripts/init-clickhouse.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
+    networks:
+      - analytics_net
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 3s
       retries: 5
+
+  # ── 2. APPLICATION LAYER (FastAPI App - Nấc 1) ─────────────
+  api_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: analytics-api:v1
+    container_name: analytics_api
+    ports:
+      - "8000:8000"   # Mở cổng 8000 để bạn có thể test trực tiếp FastAPI (bỏ qua Gateway)
+    environment:
+      CLICKHOUSE_HOST: clickhouse   # Tên service của ClickHouse trong Docker network
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DB: analytics
+      API_KEYS: "demo-key-123,demo-key-456"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - analytics_net
+
+  # ── 3. EDGE LAYER: API GATEWAY (NGINX - Nấc 2) ──────────────
+  api_gateway:
+    image: nginx:alpine
+    container_name: analytics_gateway
+    ports:
+      - "8080:80"     # Cổng bạn gọi để đi qua API Gateway: http://localhost:8080
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api_service
+    networks:
+      - analytics_net
+
+networks:
+  analytics_net:
+    driver: bridge
 
 volumes:
   clickhouse_data:
     driver: local
-
