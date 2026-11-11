@@ -1,0 +1,45 @@
+# .dockerignore — keep the build context small & avoid leaking files into images
+
+# VCS / CI
+.git
+.gitignore
+.github
+
+# Python junk
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+.venv
+venv
+env
+htmlcov
+.coverage
+
+# Secrets — never bake into images
+.env
+.env.*
+!.env.example
+k8s/secret.yaml
+*.kubeconfig
+kubeconfig
+
+# Not needed inside the API image
+k8s
+gateway
+scripts
+tests
+docs
+*.md
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# IDE / OS
+.vscode
+.idea
+*.swp
+.DS_Store
+*.log
+

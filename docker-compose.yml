@@ -54,6 +54,7 @@ services:
       CLICKHOUSE_PASSWORD: ""
       CLICKHOUSE_DB: analytics
       API_KEYS: "demo-key-123,demo-key-456"
+      WORKERS: 2                    # Chạy local: 2 process Uvicorn (image mặc định = 1 cho K8s)
     depends_on:
       clickhouse:
         condition: service_healthy

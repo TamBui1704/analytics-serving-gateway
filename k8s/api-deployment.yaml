@@ -58,6 +58,9 @@ spec:
               value: "default"
             - name: CLICKHOUSE_DB
               value: "analytics"
+            # 1 Uvicorn worker per Pod — scale via replicas / HPA instead
+            - name: WORKERS
+              value: "1"
 
           # ── Resource limits (tune for your machine) ─────────────────────────
           resources:
