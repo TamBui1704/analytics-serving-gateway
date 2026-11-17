@@ -45,8 +45,14 @@ services:
       dockerfile: Dockerfile
     image: analytics-api:v1
     container_name: analytics_api
+    # ports:
+    #   - "8000:8000"
+    # ↑ Bình luận dòng này lại khi deploy lên server thật!
+    # Khi mở, cổng 8000 bị lộ ra ngoài NGINX → hacker bypass gateway, truy cập /docs, /openapi.json thoải mái.
+    # Trên server thật: CHỈ mở cổng 8080 (NGINX). FastAPI chỉ nói chuyện nội bộ trong Docker network.
+    # Khi dev local: bỏ bình luận để gọi thẳng FastAPI mà không qua NGINX (tiện debug).
     ports:
-      - "8000:8000"   # Mở cổng 8000 để bạn có thể test trực tiếp FastAPI (bỏ qua Gateway)
+      - "127.0.0.1:8000:8000"   # Chỉ cho máy nội bộ (localhost) truy cập, không mở ra Internet
     environment:
       CLICKHOUSE_HOST: clickhouse   # Tên service của ClickHouse trong Docker network
       CLICKHOUSE_PORT: 8123
