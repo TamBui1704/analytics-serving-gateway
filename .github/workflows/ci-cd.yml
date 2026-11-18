@@ -130,7 +130,16 @@ jobs:
       - name: Apply K8s manifests
         run: |
           kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/secret.yaml      -n analytics
+          if [ -f k8s/secret.yaml ]; then
+            kubectl apply -f k8s/secret.yaml -n analytics
+          else
+            kubectl create secret generic analytics-gateway-secret \
+              --from-literal=API_KEYS="${{ secrets.API_KEYS || 'demo-key-123,demo-key-456' }}" \
+              --from-literal=CLICKHOUSE_HOST="${{ secrets.CLICKHOUSE_HOST || 'localhost' }}" \
+              --from-literal=CLICKHOUSE_PASSWORD="${{ secrets.CLICKHOUSE_PASSWORD || '' }}" \
+              -n analytics \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi
           kubectl apply -f k8s/api-deployment.yaml -n analytics
           kubectl apply -f k8s/api-service.yaml  -n analytics
           kubectl apply -f k8s/ingress.yaml      -n analytics

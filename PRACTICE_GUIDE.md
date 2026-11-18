@@ -453,7 +453,14 @@ Thực hiện áp dụng các file YAML theo đúng thứ tự:
 kubectl apply -f k8s/namespace.yaml
 
 # 2. Tạo Secret lưu mật khẩu và API Keys
-kubectl apply -f k8s/secret.yaml
+# Cách tốt nhất (Bảo mật): Tạo trực tiếp bằng lệnh CLI, tránh lưu key vào file để không sợ lộ lên Git:
+kubectl create secret generic analytics-gateway-secret \
+  --from-literal=API_KEYS="demo-key-123,demo-key-456" \
+  --from-literal=CLICKHOUSE_HOST="localhost" \
+  --from-literal=CLICKHOUSE_PASSWORD="" \
+  -n analytics \
+  --dry-run=client -o yaml | kubectl apply -f -
+# (Hoặc nếu dùng file: copy k8s/secret.example.yaml thành k8s/secret.yaml - file này đã được .gitignore)
 
 # 3. Tạo Deployment (Khởi chạy 2 Pod FastAPI)
 kubectl apply -f k8s/api-deployment.yaml

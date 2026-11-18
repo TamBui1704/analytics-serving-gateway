@@ -27,7 +27,9 @@ htmlcov/
 # Kubernetes sensitive files
 kubeconfig
 *.kubeconfig
-k8s/secret.yaml   # Remove from ignore if you use sealed secrets
+# Remove from ignore if you use sealed secrets:
+k8s/secret.yaml
+!k8s/secret.example.yaml
 
 # IDE
 .vscode/

@@ -143,7 +143,7 @@ analytics-serving-gateway/
 │   └── requirements.txt
 ├── k8s/
 │   ├── namespace.yaml            # K8s namespace
-│   ├── secret.yaml               # API keys + DB credentials
+│   ├── secret.example.yaml       # API keys + DB credentials template
 │   ├── api-deployment.yaml       # 2-replica Deployment
 │   ├── api-service.yaml          # ClusterIP Service
 │   ├── ingress.yaml              # NGINX Ingress (rate limit + auth)
