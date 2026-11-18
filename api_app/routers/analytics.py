@@ -21,22 +21,49 @@ from api_app import database
 router = APIRouter()
 
 # ── API Key validation ─────────────────────────────────────────────────────────
-# In production: store hashed keys in DB / Vault.
-# For learning: a simple env-var set is fine.
 import os
+import secrets
+import logging
 
-_VALID_KEYS: set[str] = set(
-    filter(None, os.getenv("API_KEYS", "demo-key-123,demo-key-456").split(","))
-)
+logger = logging.getLogger("analytics-gateway")
+
+def _get_valid_keys() -> set[str]:
+    """
+    Đọc danh sách API Keys hợp lệ từ biến môi trường (K8s Secret hoặc .env).
+    Chuẩn Production (Fail-Fast): Không bao giờ hardcode key mặc định trong code.
+    Nếu thiếu biến môi trường, server sẽ dừng và báo lỗi bảo mật ngay lập tức.
+    """
+    raw = os.getenv("API_KEYS", "").strip()
+    if not raw:
+        raise RuntimeError(
+            "CRITICAL SECURITY CONFIGURATION: The 'API_KEYS' environment variable "
+            "is required and cannot be empty! Please configure it in your K8s Secret or .env file."
+        )
+    return set(filter(None, [k.strip() for k in raw.split(",")]))
 
 
 async def require_api_key(x_api_key: Annotated[str | None, Header()] = None):
     """
     FastAPI dependency that validates the X-API-Key header.
     NGINX Ingress already blocks requests without the header;
-    this layer validates the *value*.
+    this layer validates the *value* using constant-time comparison
+    (secrets.compare_digest) to eliminate Timing Attack vulnerabilities.
     """
-    if x_api_key not in _VALID_KEYS:
+    if not x_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key. Pass a valid X-API-Key header.",
+        )
+
+    valid_keys = _get_valid_keys()
+
+    # Constant-time comparison chống Timing Attack
+    is_valid = any(
+        secrets.compare_digest(x_api_key, valid_key)
+        for valid_key in valid_keys
+    )
+
+    if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key. Pass a valid X-API-Key header.",

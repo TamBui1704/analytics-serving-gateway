@@ -1,0 +1,21 @@
+# k8s/configmap.yaml
+# Stores non-sensitive application configuration
+# Safe to commit to Git
+#
+# Apply: kubectl apply -f k8s/configmap.yaml -n analytics
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analytics-gateway-config
+  namespace: analytics
+  labels:
+    app: analytics-api
+data:
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_USER: "default"
+  CLICKHOUSE_DB: "analytics"
+  WORKERS: "1"
+  # Danh sách domain Frontend được phép gọi API (ngăn chặn tấn công CSRF / data exfiltration)
+  CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://analytics.local"
+

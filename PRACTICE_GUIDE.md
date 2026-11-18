@@ -452,7 +452,10 @@ Thực hiện áp dụng các file YAML theo đúng thứ tự:
 # 1. Tạo "khu vực riêng" (Namespace) cho dự án
 kubectl apply -f k8s/namespace.yaml
 
-# 2. Tạo Secret lưu mật khẩu và API Keys
+# 2. Tạo ConfigMap lưu cấu hình không nhạy cảm (Port, DB name, Workers...)
+kubectl apply -f k8s/configmap.yaml -n analytics
+
+# 3. Tạo Secret lưu mật khẩu và API Keys
 # Cách tốt nhất (Bảo mật): Tạo trực tiếp bằng lệnh CLI, tránh lưu key vào file để không sợ lộ lên Git:
 kubectl create secret generic analytics-gateway-secret \
   --from-literal=API_KEYS="demo-key-123,demo-key-456" \
@@ -460,19 +463,22 @@ kubectl create secret generic analytics-gateway-secret \
   --from-literal=CLICKHOUSE_PASSWORD="" \
   -n analytics \
   --dry-run=client -o yaml | kubectl apply -f -
-# (Hoặc nếu dùng file: copy k8s/secret.example.yaml thành k8s/secret.yaml - file này đã được .gitignore)
+# (Hoặc nếu dùng file: copy k8s/secret.yaml.example thành k8s/secret.yaml - file này đã được .gitignore)
 
-# 3. Tạo Deployment (Khởi chạy 2 Pod FastAPI)
+# 4. Tạo Deployment (Khởi chạy 2 Pod FastAPI)
 kubectl apply -f k8s/api-deployment.yaml
 
-# 4. Tạo Service (Bộ cân bằng tải nội bộ)
+# 5. Tạo Service (Bộ cân bằng tải nội bộ)
 kubectl apply -f k8s/api-service.yaml
 
-# 5. Tạo Ingress (API Gateway NGINX)
+# 6. Tạo Ingress (API Gateway NGINX)
 kubectl apply -f k8s/ingress.yaml
 
-# 6. Tạo HPA (Tự động co giãn theo CPU)
+# 7. Tạo HPA (Tự động co giãn theo CPU)
 kubectl apply -f k8s/hpa.yaml
+
+# 8. Tạo NetworkPolicy (Tường lửa nội bộ cô lập Pod)
+kubectl apply -f k8s/network-policy.yaml
 ```
 
 ---

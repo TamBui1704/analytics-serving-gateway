@@ -5,10 +5,14 @@ Uses httpx.AsyncClient with TestClient so no real ClickHouse is needed.
 ClickHouse calls are mocked via pytest monkeypatch.
 """
 
+import os
 import pytest
-from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch
 
+# Đặt biến môi trường riêng cho bài test (không hardcode trong code production)
+os.environ.setdefault("API_KEYS", "demo-key-123,demo-key-456")
+
+from fastapi.testclient import TestClient
 from api_app.main import app
 
 client = TestClient(app)

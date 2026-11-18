@@ -21,7 +21,7 @@ services:
     image: clickhouse/clickhouse-server:24.8-alpine
     container_name: analytics_clickhouse
     ports:
-      - "8123:8123"   # Mở cổng HTTP để truy vấn trực tiếp khi cần debug
+      - "127.0.0.1:8123:8123"   # Chỉ bind vào localhost, không mở ra toàn mạng (0.0.0.0) tránh hacker scan port
     environment:
       CLICKHOUSE_DB: analytics
       CLICKHOUSE_USER: default
@@ -60,6 +60,7 @@ services:
       CLICKHOUSE_PASSWORD: ""
       CLICKHOUSE_DB: analytics
       API_KEYS: "demo-key-123,demo-key-456"
+      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080"
       WORKERS: 2                    # Chạy local: 2 process Uvicorn (image mặc định = 1 cho K8s)
     depends_on:
       clickhouse:

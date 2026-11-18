@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+import os
 import time
 import logging
 
@@ -32,12 +33,18 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# ── CORS ───────────────────────────────────────────────────────────────────────
+# ── CORS (Whitelist có thể cấu hình qua biến môi trường) ──────────────────────
+# Hỗ trợ máy local phát triển và dễ dàng override khi có domain production
+_DEFAULT_CORS = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://analytics.local"
+cors_origins_raw = os.getenv("CORS_ORIGINS", _DEFAULT_CORS)
+allowed_origins = [origin.strip() for origin in cors_origins_raw.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
-    allow_methods=["GET"],
-    allow_headers=["*"],
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key", "X-Client-Key", "Authorization"],
 )
 
 # ── Request logging middleware ─────────────────────────────────────────────────

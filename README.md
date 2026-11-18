@@ -143,10 +143,12 @@ analytics-serving-gateway/
 │   └── requirements.txt
 ├── k8s/
 │   ├── namespace.yaml            # K8s namespace
-│   ├── secret.example.yaml       # API keys + DB credentials template
+│   ├── configmap.yaml            # Non-sensitive app config (DB port, name, workers)
+│   ├── secret.yaml.example       # API keys + DB credentials template
 │   ├── api-deployment.yaml       # 2-replica Deployment
 │   ├── api-service.yaml          # ClusterIP Service
 │   ├── ingress.yaml              # NGINX Ingress (rate limit + auth)
+│   ├── network-policy.yaml       # K8s network isolation policy
 │   └── hpa.yaml                  # Auto-scaling (2–5 Pods)
 ├── scripts/init-clickhouse.sql   # Sample data (50K orders)
 ├── tests/test_api.py             # Pytest suite (mocked DB)

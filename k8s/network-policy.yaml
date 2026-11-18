@@ -1,0 +1,38 @@
+# k8s/network-policy.yaml
+# NetworkPolicy: Cô lập mạng nội bộ cho namespace 'analytics' (Defense-in-depth)
+#
+# Nguyên tắc hoạt động:
+#   1. Mặc định chặn tất cả traffic lạ từ các namespace khác chui vào Pod API.
+#   2. Chỉ cho phép traffic từ Ingress Controller (hoặc cùng namespace) gọi vào cổng 8000.
+#   3. Cho phép Pod gọi ra ngoài (egress) để kết nối Database và DNS.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-network-policy
+  namespace: analytics
+  labels:
+    app: analytics-api
+spec:
+  podSelector:
+    matchLabels:
+      app: analytics-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Cho phép nhận kết nối vào cổng 8000
+    - from:
+        # Cho phép từ Ingress NGINX controller
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        # Cho phép các Pod trong cùng namespace analytics
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # Cho phép Pod gửi request ra ngoài (DNS UDP/TCP 53, ClickHouse, HTTPS)
+    - {}
+

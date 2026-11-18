@@ -47,20 +47,19 @@ spec:
             - containerPort: 8000
               name: http
 
-          # ── Inject secrets as environment variables ─────────────────────────
+          # ── Container security hardening ────────────────────────────────────
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+          # ── Inject configuration & secrets as environment variables ──────────
           envFrom:
+            - configMapRef:
+                name: analytics-gateway-config
             - secretRef:
                 name: analytics-gateway-secret
-          env:
-            - name: CLICKHOUSE_PORT
-              value: "8123"
-            - name: CLICKHOUSE_USER
-              value: "default"
-            - name: CLICKHOUSE_DB
-              value: "analytics"
-            # 1 Uvicorn worker per Pod — scale via replicas / HPA instead
-            - name: WORKERS
-              value: "1"
 
           # ── Resource limits (tune for your machine) ─────────────────────────
           resources:

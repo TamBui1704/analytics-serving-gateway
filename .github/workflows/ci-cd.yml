@@ -130,6 +130,7 @@ jobs:
       - name: Apply K8s manifests
         run: |
           kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml   -n analytics
           if [ -f k8s/secret.yaml ]; then
             kubectl apply -f k8s/secret.yaml -n analytics
           else
@@ -143,6 +144,7 @@ jobs:
           kubectl apply -f k8s/api-deployment.yaml -n analytics
           kubectl apply -f k8s/api-service.yaml  -n analytics
           kubectl apply -f k8s/ingress.yaml      -n analytics
+          kubectl apply -f k8s/network-policy.yaml -n analytics
           kubectl apply -f k8s/hpa.yaml          -n analytics
 
       - name: Update deployment image to new SHA
