@@ -1,67 +1,65 @@
 # k8s/ingress.yaml
-# NGINX Ingress — acts as the API Gateway (Edge Layer).
+# NGINX Ingress Controller — API Gateway L7 Routing (Phương án A: Tinh gọn)
 #
-# Features demonstrated via annotations:
-#   ✅ Rate Limiting  : 10 req/s per IP (burst up to 20)
-#   ✅ API Key check  : NGINX checks X-API-Key header presence
-#   ✅ CORS headers   : Allow cross-origin requests
-#   ✅ Request size   : Limit payload to 1m
-#   ✅ Timeout tuning : Prevent slow connections from blocking workers
-#
-# Install NGINX Ingress Controller first:
-#   minikube addons enable ingress
-#   OR
-#   helm upgrade --install ingress-nginx ingress-nginx \
-#     --repo https://kubernetes.github.io/ingress-nginx \
-#     --namespace ingress-nginx --create-namespace
+# Nhiệm vụ của Ingress Controller:
+#   ✅ Chấm dứt SSL/TLS (HTTPS)
+#   ✅ Rate Limiting : 10 req/s per IP (chống Spam / DDoS)
+#   ✅ Điều phối tên miền (Subdomain Routing):
+#       - analytics.local -> Chuyển vào Service ClusterIP analytics-api-svc
+#       - branding.local  -> Chuyển vào Service ClusterIP branding-api-svc
+#   ✅ KHÔNG nhồi nhét logic Auth: Mỗi backend tự check sha256(key + timestamp)
 
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: analytics-gateway
+  name: api-gateway-ingress
   namespace: analytics
   annotations:
-    # ── Ingress class ─────────────────────────────────────────────────────────
-    kubernetes.io/ingress.class: "nginx"
-
-    # ── Rate limiting ─────────────────────────────────────────────────────────
-    # Limit each client IP to 10 requests/second
+    # ── Rate limiting (Chống Spam / DDoS ngay tại cửa ngõ) ────────────────────
     nginx.ingress.kubernetes.io/limit-rps: "10"
-    # Allow burst of 20 (queued before rejecting with 429)
     nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
-    # Return 429 Too Many Requests (instead of default 503)
-    nginx.ingress.kubernetes.io/limit-whitelist: ""
 
-    # ── Require X-API-Key header to be present ────────────────────────────────
-    # NGINX returns 401 if header is missing.
-    # The actual key *value* is validated by the FastAPI dependency.
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      if ($http_x_api_key = "") {
-        return 401 '{"detail":"X-API-Key header is required"}';
-      }
-      add_header Content-Type application/json always;
+    # ── Chuyển hướng HTTP sang HTTPS ──────────────────────────────────────────
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 
-    # ── Timeout settings ──────────────────────────────────────────────────────
+    # ── Cấu hình Timeout & Kích thước Request ─────────────────────────────────
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
-
-    # ── Max body size ─────────────────────────────────────────────────────────
     nginx.ingress.kubernetes.io/proxy-body-size: "1m"
 
-    # ── Rewrite / strip prefix (optional) ────────────────────────────────────
-    # nginx.ingress.kubernetes.io/rewrite-target: /$2
-
 spec:
+  # Chỉ định IngressClass (chuẩn K8s hiện đại >= 1.18)
+  ingressClassName: nginx
+
+  # Cấu hình chứng chỉ TLS/SSL (được tạo từ K8s Secret tls)
+  tls:
+    - hosts:
+        - analytics.local
+        - branding.local
+      secretName: gateway-tls-secret
+
   rules:
-    - host: analytics.local     # Add to /etc/hosts: $(minikube ip) analytics.local
+    # ── 1. ĐIỀU PHỐI DỊCH VỤ ANALYTICS ────────────────────────────────────────
+    - host: analytics.local
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: analytics-api-svc
+                name: analytics-api-svc       # Service ClusterIP nội bộ của Analytics
                 port:
                   number: 80
 
+    # ── 2. ĐIỀU PHỐI DỊCH VỤ BRANDING ─────────────────────────────────────────
+    - host: branding.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: branding-api-svc        # Service ClusterIP nội bộ của Branding
+                port:
+                  number: 80

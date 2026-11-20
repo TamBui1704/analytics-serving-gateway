@@ -14,12 +14,14 @@
 
 ```
 [Client]
-    │  X-API-Key header
+    │  Timestamp + Authorization: Bearer <sha256_token>
     ▼
-[NGINX Ingress] ← Rate Limit (10 rps) + API Key presence check
+[NGINX Gateway / Ingress] ← SSL Termination (HTTPS) + Subdomain Routing + Rate Limit (10 rps)
     │
     ▼
-[K8s Deployment: FastAPI × 2 Pods] ← HPA (2–5 Pods by CPU)
+[K8s Deployment / Docker: FastAPI Backend]
+    ├─ Analytics Router  (/api/v1/sales/*)     ← Verified against ANALYTICS_API_KEYS
+    └─ Branding Router   (/api/v1/branding/*)  ← Verified against BRANDING_API_KEYS
     │
     ▼
 [ClickHouse] ← OLAP queries (50K+ sample orders)
@@ -62,9 +64,11 @@ docker compose logs clickhouse | tail -5
 
 ### 2. Build & run locally (without K8s)
 ```bash
-cd api_app
-pip install -r requirements.txt
-CLICKHOUSE_HOST=localhost API_KEYS=demo-key-123 uvicorn api_app.main:app --reload
+pip install -r api_app/requirements.txt
+CLICKHOUSE_HOST=localhost \
+ANALYTICS_API_KEYS="demo-key-123" \
+BRANDING_API_KEYS="demo-key-123" \
+uvicorn api_app.main:app --reload
 # → http://localhost:8000/docs
 ```
 
@@ -84,18 +88,26 @@ sed -i 's|ghcr.io/YOUR_GITHUB_USER/analytics-serving-gateway:latest|analytics-ap
 kubectl apply -f k8s/
 
 # Add to /etc/hosts
-echo "$(minikube ip) analytics.local" | sudo tee -a /etc/hosts
+echo "$(minikube ip) analytics.local branding.local" | sudo tee -a /etc/hosts
 
-# Test!
-curl -H "X-API-Key: demo-key-123" http://analytics.local/api/v1/sales/daily
+# Test with SHA-256 + Timestamp signing!
+NOW=$(date +%s)
+TOKEN=$(echo -n "demo-key-123${NOW}" | sha256sum | awk '{print $1}')
+curl -H "Timestamp: ${NOW}" \
+     -H "Authorization: Bearer ${TOKEN}" \
+     http://analytics.local/api/v1/sales/daily?days=7
 ```
 
 ### 4. Test rate limiting
 ```bash
-# Send 15 rapid requests — the 11th+ should get HTTP 429
-for i in $(seq 1 15); do
+NOW=$(date +%s)
+TOKEN=$(echo -n "demo-key-123${NOW}" | sha256sum | awk '{print $1}')
+
+# Send 25 rapid requests — exceeding rate limit should get HTTP 429 / 503
+for i in $(seq 1 25); do
   curl -s -o /dev/null -w "%{http_code}\n" \
-    -H "X-API-Key: demo-key-123" \
+    -H "Timestamp: ${NOW}" \
+    -H "Authorization: Bearer ${TOKEN}" \
     http://analytics.local/api/v1/sales/daily
 done
 ```
@@ -104,13 +116,14 @@ done
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/healthz` | Liveness probe |
+| `GET` | `/healthz` | Liveness probe (no auth required) |
 | `GET` | `/readyz` | Readiness probe (checks DB) |
-| `GET` | `/api/v1/sales/daily` | Daily sales summary |
-| `GET` | `/api/v1/products/top` | Top products by revenue |
-| `GET` | `/api/v1/regions/summary` | Sales by region |
+| `GET` | `/api/v1/sales/daily` | Daily sales summary (Analytics Service) |
+| `GET` | `/api/v1/products/top` | Top products by revenue (Analytics Service) |
+| `GET` | `/api/v1/regions/summary` | Sales by region (Analytics Service) |
+| `GET` | `/api/v1/branding/overview` | Branding overview (Branding Service) |
 
-All analytics endpoints require `X-API-Key` header.
+All business endpoints require `Timestamp` and `Authorization: Bearer <sha256_token>` headers.
 
 ## 🔄 CI/CD Flow (GitHub Actions)
 
@@ -138,8 +151,11 @@ analytics-serving-gateway/
 ├── .github/workflows/ci-cd.yml   # GitHub Actions CI/CD pipeline
 ├── api_app/
 │   ├── main.py                   # FastAPI app + middleware
+│   ├── auth.py                   # Decentralized SHA-256 + Timestamp auth module
 │   ├── database.py               # ClickHouse async client
-│   ├── routers/analytics.py      # Business endpoints
+│   ├── routers/
+│   │   ├── analytics.py          # Analytics endpoints
+│   │   └── branding.py           # Branding endpoints
 │   └── requirements.txt
 ├── k8s/
 │   ├── namespace.yaml            # K8s namespace
@@ -147,13 +163,17 @@ analytics-serving-gateway/
 │   ├── secret.yaml.example       # API keys + DB credentials template
 │   ├── api-deployment.yaml       # 2-replica Deployment
 │   ├── api-service.yaml          # ClusterIP Service
-│   ├── ingress.yaml              # NGINX Ingress (rate limit + auth)
+│   ├── ingress.yaml              # NGINX Ingress (subdomain routing + SSL)
 │   ├── network-policy.yaml       # K8s network isolation policy
 │   └── hpa.yaml                  # Auto-scaling (2–5 Pods)
-├── scripts/init-clickhouse.sql   # Sample data (50K orders)
-├── tests/test_api.py             # Pytest suite (mocked DB)
+├── gateway/
+│   └── nginx.conf                # NGINX Reverse Proxy + SSL Termination + Subdomain router
+├── scripts/
+│   ├── generate-ssl.sh           # Local self-signed SSL/TLS generator
+│   └── init-clickhouse.sql       # Sample data (50K orders)
+├── tests/test_api.py             # Pytest suite (mocked DB + Auth signing)
 ├── Dockerfile                    # Multi-stage build
-├── docker-compose.yml            # ClickHouse local
+├── docker-compose.yml            # ClickHouse, API Service, NGINX Gateway
 └── README.md
 ```
 

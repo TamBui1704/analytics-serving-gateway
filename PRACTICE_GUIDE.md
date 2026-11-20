@@ -54,7 +54,13 @@ docker compose up -d clickhouse api_service
 3. **Thử gọi API lấy báo cáo doanh thu theo ngày**:
    *(Truy vấn trực tiếp bảng orders chứa 50.000 bản ghi trên ClickHouse)*:
    ```bash
-   curl -H "X-API-Key: demo-key-123" "http://localhost:8000/api/v1/sales/daily?days=7"
+   NOW=$(date +%s)
+   TOKEN=$(echo -n "demo-key-123${NOW}" | sha256sum | awk '{print $1}')
+
+   # Gọi kèm chữ ký SHA-256 + Timestamp (chuẩn bảo mật Production):
+   curl -H "Timestamp: ${NOW}" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        "http://localhost:8000/api/v1/sales/daily?days=7"
    ```
 
 ---
@@ -67,49 +73,76 @@ docker compose up -d clickhouse api_service
 - Hiểu vai trò của **Rate Limiting**: Chống spam và bảo vệ hệ thống khỏi bị quá tải.
 
 ### 2. Khởi động Nấc 2:
-Bật thêm container `api_gateway`:
+
+#### Bước 2.1: Tạo chứng chỉ SSL/TLS thủ công cho HTTPS (cho cả analytics.local và branding.local):
+Trước khi bật NGINX, ta chạy script tạo cặp khóa RSA 2048-bit và chứng chỉ x509:
+```bash
+bash scripts/generate-ssl.sh
+# Kết quả: Tự động sinh ra 2 file gateway/certs/nginx.crt và gateway/certs/nginx.key
+```
+
+#### Bước 2.2: Bật container `api_gateway`:
+Bật container `api_gateway` (được mount thư mục `gateway/certs` và cấu hình HTTPS):
 ```bash
 docker compose up -d api_gateway
 ```
 
 Lúc này kiến trúc trở thành:
 ```
-Client ──► Cổng 8080 (NGINX Gateway) ──► Cổng 8000 (FastAPI) ──► ClickHouse (8123)
+Client ──► Cổng 8080 (HTTP) hoặc 8443 (HTTPS) ──► NGINX Gateway ──► Cổng 8000 (FastAPI) ──► ClickHouse (8123)
 ```
 
 ### 3. Thực hành kiểm chứng các tính năng của Gateway:
 
-#### Thí nghiệm 2.1: Gọi bình thường qua Gateway (Thành công)
-Gọi qua cổng **8080** thay vì 8000:
-```bash
-curl -H "X-API-Key: demo-key-123" "http://localhost:8080/api/v1/sales/daily?days=7"
-```
-👉 Bạn vẫn nhận được dữ liệu, nhưng request đã đi qua NGINX trung gian.
+> 🛡️ **Chuẩn bảo mật Production (Chữ ký SHA-256 + Timestamp):**
+> Secret Key **KHÔNG BAO GIỜ** được gửi trực tiếp lên Header qua mạng.
+> Thay vào đó, Client tính toán chữ ký số:
+> `Token = sha256(secret_key + timestamp)` và gửi kèm `Timestamp` (hợp lệ trong 60 giây).
 
-#### Thí nghiệm 2.2: Test Edge Authentication (Chặn đứng tại cổng)
-Thử gửi request mà **KHÔNG** truyền header `X-API-Key`:
+#### Thí nghiệm 2.1: Gọi bình thường qua Gateway (Thành công)
+Tạo Token và gọi qua cổng **8080** (HTTP) hoặc **8443** (HTTPS):
+```bash
+# 1. Lấy Unix timestamp hiện tại (giây)
+NOW=$(date +%s)
+
+# 2. Tạo Token = SHA256(secret_key + timestamp) với key demo-key-123
+TOKEN=$(echo -n "demo-key-123${NOW}" | sha256sum | awk '{print $1}')
+
+# 3. Gửi request kèm Timestamp và Token chữ ký:
+curl -H "Timestamp: ${NOW}" \
+     -H "Authorization: Bearer ${TOKEN}" \
+     "http://localhost:8080/api/v1/sales/daily?days=7"
+```
+👉 Bạn nhận được dữ liệu JSON, Secret Key được giữ kín an toàn trên máy client, và request đã đi qua NGINX trung gian.
+
+#### Thí nghiệm 2.2: Test Edge Authentication (Chặn đứng khi thiếu hoặc sai xác thực)
+Thử gửi request mà **KHÔNG** truyền Timestamp và Token:
 ```bash
 curl -i http://localhost:8080/api/v1/sales/daily
 ```
-👉 **Hiện tượng**: NGINX lập tức trả về:
+👉 **Hiện tượng**: Hệ thống lập tức trả về:
 ```json
 HTTP/1.1 401 Unauthorized
-{"error": "Unauthorized", "message": "API Gateway: Missing X-API-Key header"}
+{"detail": "Missing 'Timestamp' header for analytics service. Production requires 'Timestamp' and 'Authorization: Bearer <sha256_token>'."}
 ```
-*(Hãy kiểm tra logs của FastAPI bằng `docker logs analytics_api`, bạn sẽ thấy **hoàn toàn không có log nào**, chứng minh request đã bị chặn ngay ở vòng gửi xe!)*
+*(Request bị từ chối ngay lập tức, bảo vệ an toàn cho cơ sở dữ liệu ClickHouse).*
 
-#### Thí nghiệm 2.3: Test Rate Limiting (Chặn spam)
-Trong file [`gateway/nginx.conf`](gateway/nginx.conf), chúng ta quy định tối đa **5 requests/giây**. Hãy chạy vòng lặp gửi dồn dập 15 requests trong 1 giây:
+#### Thí nghiệm 2.3: Test Rate Limiting (Chống Spam / DDoS)
+Trong file [`gateway/nginx.conf`](gateway/nginx.conf), chúng ta quy định tối đa **10 requests/giây**. Hãy chạy vòng lặp gửi dồn dập 25 requests:
 ```bash
-for i in {1..15}; do
+NOW=$(date +%s)
+TOKEN=$(echo -n "demo-key-123${NOW}" | sha256sum | awk '{print $1}')
+
+for i in {1..25}; do
   curl -s -o /dev/null -w "Req $i: HTTP %{http_code}\n" \
-    -H "X-API-Key: demo-key-123" \
+    -H "Timestamp: ${NOW}" \
+    -H "Authorization: Bearer ${TOKEN}" \
     http://localhost:8080/api/v1/sales/daily
 done
 ```
 👉 **Hiện tượng**: 
 - Các request đầu: `HTTP 200`
-- Các request dồn dập tiếp theo: `HTTP 429 Too Many Requests`!
+- Các request dồn dập vượt quá ngưỡng giới hạn: `HTTP 503` hoặc `HTTP 429` do NGINX Rate Limiting chặn đứng!
 
 ---
 
@@ -123,67 +156,62 @@ done
 
 ### 1. Mục tiêu bài thực hành này
 
-- Hiểu cách NGINX phân luồng request theo **Subdomain** (tên miền phụ).
-- Hiểu cách **phân quyền API Key** theo từng dịch vụ bằng directive `map`.
-- Hiểu tại sao các dự án Production **không chia key riêng cho từng dịch vụ**, mà cấp cho mỗi khách **1 Master Key duy nhất** rồi để Gateway lo phân quyền.
+- Hiểu cách NGINX phân luồng request theo **Subdomain** (`analytics.local`, `branding.local`).
+- Hiểu kiến trúc **Decentralized Auth (Phân quyền phi tập trung)**: NGINX giữ vai trò L7 Reverse Proxy định tuyến trong sáng, xử lý SSL Termination (HTTPS) và Rate Limiting; từng Service tự quản lý danh sách Key được phép qua biến môi trường độc lập (`ANALYTICS_API_KEYS`, `BRANDING_API_KEYS`).
+- Áp dụng chuẩn bảo mật Production: Xác thực bằng chữ ký số **SHA-256 + Timestamp** với cửa sổ hiệu lực 60 giây chống Replay Attack, tuyệt đối không gửi Secret Key thô qua đường mạng.
 
 ---
 
-### 2. Kiến trúc bài thực hành
+### 2. Kiến trúc bài thực hành (Option A: Decentralized Auth)
 
 ```
-                        ┌─────────────────────────────────────┐
-                        │       SERVER NGINX GATEWAY :8080    │
-                        │                                     │
-Client gọi vào ────────►│  analytics.local ──► FastAPI :8000  │
-  kèm X-Client-Key      │  branding.local  ──► Trả JSON giả  │
-                        │                                     │
-                        │  Ma trận phân quyền (nginx.conf):   │
-                        │  key_user_a   → Chỉ analytics       │
-                        │  key_user_b   → Chỉ branding        │
-                        │  key_user_vip → Cả hai dịch vụ      │
-                        └─────────────────────────────────────┘
+                            ┌───────────────────────────────────────────────┐
+                            │          SERVER NGINX GATEWAY :8443 (HTTPS)   │
+                            │                                               │
+Client gọi vào ────────────►│  analytics.local ──► Proxy pass sang Backend  │
+(Timestamp + Token SHA-256) │  branding.local  ──► Proxy pass sang Backend  │
+                            │                                               │
+                            │  * SSL Termination (TLS 1.2 / TLS 1.3)        │
+                            │  * Rate Limit (10 req/s, burst 20)            │
+                            └───────────────────────┬───────────────────────┘
+                                                    │ (HTTP nội bộ)
+                                                    ▼
+                            ┌───────────────────────────────────────────────┐
+                            │               FASTAPI BACKEND                 │
+                            │                                               │
+                            │  /api/v1/sales/*     (Router Analytics)       │
+                            │    └─ Kiểm tra: key in ANALYTICS_API_KEYS     │
+                            │                                               │
+                            │  /api/v1/branding/*  (Router Branding)        │
+                            │    └─ Kiểm tra: key in BRANDING_API_KEYS      │
+                            └───────────────────────────────────────────────┘
 ```
 
-**Bảng phân quyền khách hàng:**
+**Bảng ma trận phân quyền khách hàng:**
 
-| Client Key | Quyền vào `analytics.local` | Quyền vào `branding.local` |
-|:---:|:---:|:---:|
-| `key_user_a` | ✅ Có | ❌ Không |
-| `key_user_b` | ❌ Không | ✅ Có |
-| `key_user_vip` | ✅ Có | ✅ Có |
+| Khách hàng | Secret Key | Quyền gọi `analytics.local` | Quyền gọi `branding.local` |
+|:---|:---:|:---:|:---:|
+| Khách A | `key_user_a` | ✅ Được phép | ❌ Bị chặn (401) |
+| Khách B | `key_user_b` | ❌ Bị chặn (401) | ✅ Được phép |
+| Khách VIP | `key_user_vip` | ✅ Được phép | ✅ Được phép |
 
 ---
 
-### 3. Giải thích file cấu hình hiện tại [`gateway/nginx.conf`](gateway/nginx.conf)
+### 3. Giải thích file cấu hình [`gateway/nginx.conf`](gateway/nginx.conf)
 
-Cơ chế phân quyền dùng directive `map` — hoạt động như một bảng tra cứu `switch/case`:
-
-```nginx
-# NGINX đọc giá trị header X-Client-Key do client gửi lên,
-# rồi dùng nó làm "chìa khóa" tra vào bảng để sinh ra biến mới.
-map $http_x_client_key $allow_analytics {
-    default        0;         # Không có trong danh sách → bị từ chối
-    "key_user_a"   1;         # key_user_a → được phép
-    "key_user_vip" 1;         # key_user_vip → được phép
-}
-```
-
-Tại mỗi `location`, NGINX chỉ kiểm tra biến vừa tạo ra:
-```nginx
-if ($allow_analytics = 0) {
-    return 403 '{"error": "Forbidden: You do not have access to Analytics service"}\n';
-}
-```
-
-**Điểm bảo mật quan trọng:** Khách hàng chỉ biết `X-Client-Key` của họ. NGINX âm thầm **tự thêm** key nội bộ `X-API-Key: demo-key-123` trước khi chuyển vào FastAPI. FastAPI không bao giờ bị lộ key ra ngoài!
+NGINX hoạt động như một L7 Router thuần túy, an toàn và tối ưu hiệu năng:
+1. **SSL Termination:** Lắng nghe trên cổng `8443` (HTTPS) với chuẩn `TLSv1.2 TLSv1.3`.
+2. **Subdomain Routing:**
+   - Block `server_name analytics.local;` định tuyến traffic tới Router Analytics (`/api/v1/sales/*`).
+   - Block `server_name branding.local;` định tuyến traffic tới Router Branding (`/api/v1/branding/*`).
+3. **Chuyển tiếp đầy đủ Header:** NGINX giữ nguyên các header xác thực (`Timestamp`, `Authorization`) và gán thêm các header chuẩn (`Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`) cho Backend.
+4. **Không phụ thuộc file phân quyền phức tạp:** Khi cần cấp/hủy quyền khách hàng, ta chỉ cần thay đổi biến môi trường ở Backend (`ANALYTICS_API_KEYS`, `BRANDING_API_KEYS`), hoàn toàn không cần can thiệp hay reload NGINX Gateway.
 
 ---
 
 ### 4. Thiết lập môi trường test
 
-Vì chúng ta không mua tên miền thật, ta dùng file `/etc/hosts` để "đánh lừa" máy tính:
-khi trình duyệt/curl gõ `analytics.local`, máy sẽ trỏ về chính `127.0.0.1` (máy mình).
+Vì chúng ta không mua tên miền thật, ta dùng file `/etc/hosts` để trỏ hai domain nội bộ về máy mình:
 
 #### Bước 4.1 — Thêm tên miền giả vào `/etc/hosts`
 
@@ -197,136 +225,135 @@ tail -3 /etc/hosts
 # 127.0.0.1 analytics.local branding.local
 ```
 
-> **Giải thích:** File `/etc/hosts` là "cuốn danh bạ nội bộ" của máy tính.
-> Máy tính luôn tra file này TRƯỚC khi hỏi DNS thật trên Internet.
-> Vì vậy không cần mua domain, bạn vẫn có thể dùng tên miền tùy ý trên máy.
-
-#### Bước 4.2 — Khởi động toàn bộ stack (nếu chưa chạy)
+#### Bước 4.2 — Khởi động toàn bộ stack Docker
 
 ```bash
+# Khởi động cụm Docker (ClickHouse, FastAPI Backend, NGINX Gateway):
 docker compose up -d
 ```
 
 ---
 
-### 5. Thực hành bằng Terminal (curl)
+### 5. Thực hành bằng Terminal (curl với Chữ ký SHA-256 + Timestamp)
 
-Cú pháp chung:
-```bash
-curl -s -H "X-Client-Key: <key_của_bạn>" "http://<subdomain>:8080/<endpoint>"
-```
+> 🛡️ **Chuẩn bảo mật Production:** 
+> Secret Key **KHÔNG BAO GIỜ** được gửi thẳng trên Header qua đường mạng.
+> Thay vào đó, Client tính toán chữ ký số:
+> `Token = sha256(secret_key + timestamp)` và gửi kèm header `Timestamp` (hợp lệ trong 60 giây).
 
-#### Thí nghiệm 2.5.1 — Khách A (chỉ có quyền Analytics)
-
-```bash
-# ✅ THÀNH CÔNG: key_user_a được phép vào Analytics
-curl -H "X-Client-Key: key_user_a" "http://analytics.local:8080/api/v1/sales/daily?days=7"
-
-# ❌ BỊ CHẶN 403: key_user_a không có quyền vào Branding
-curl -H "X-Client-Key: key_user_a" "http://branding.local:8080/"
-```
-
-Kết quả mong đợi:
-```
-# Lần 1: Dữ liệu JSON từ ClickHouse (hoặc [] nếu chưa có dữ liệu)
-# Lần 2: {"error": "Forbidden: You do not have access to Branding service"}
-```
-
-#### Thí nghiệm 2.5.2 — Khách B (chỉ có quyền Branding)
+#### Thí nghiệm 2.5.1 — Khách A (`key_user_a`: chỉ có quyền Analytics)
 
 ```bash
-# ❌ BỊ CHẶN 403: key_user_b không có quyền vào Analytics
-curl -H "X-Client-Key: key_user_b" "http://analytics.local:8080/api/v1/sales/daily?days=7"
+# 1. Tính toán chữ ký SHA-256 cho Khách A
+NOW=$(date +%s)
+TOKEN_A=$(echo -n "key_user_a${NOW}" | sha256sum | awk '{print $1}')
 
-# ✅ THÀNH CÔNG: key_user_b được phép vào Branding
-curl -H "X-Client-Key: key_user_b" "http://branding.local:8080/"
+# ✅ THÀNH CÔNG (200 OK): key_user_a có quyền gọi Analytics
+curl -k -H "Timestamp: ${NOW}" \
+     -H "Authorization: Bearer ${TOKEN_A}" \
+     "https://analytics.local:8443/api/v1/sales/daily?days=7"
+
+# ❌ BỊ CHẶN (401 Unauthorized): key_user_a KHÔNG có quyền gọi Branding
+curl -k -H "Timestamp: ${NOW}" \
+     -H "Authorization: Bearer ${TOKEN_A}" \
+     "https://branding.local:8443/api/v1/branding/overview"
 ```
 
-Kết quả mong đợi:
-```
-# Lần 1: {"error": "Forbidden: You do not have access to Analytics service"}
-# Lần 2: {"service": "Branding API", "status": "active", "message": "Welcome to Branding Hub!"}
-```
-
-#### Thí nghiệm 2.5.3 — Khách VIP (có quyền tất cả dịch vụ)
+#### Thí nghiệm 2.5.2 — Khách B (`key_user_b`: chỉ có quyền Branding)
 
 ```bash
-# ✅ THÀNH CÔNG trên cả hai dịch vụ
-curl -H "X-Client-Key: key_user_vip" "http://analytics.local:8080/api/v1/sales/daily?days=7"
-curl -H "X-Client-Key: key_user_vip" "http://branding.local:8080/"
+# 1. Tính toán chữ ký SHA-256 cho Khách B
+NOW=$(date +%s)
+TOKEN_B=$(echo -n "key_user_b${NOW}" | sha256sum | awk '{print $1}')
+
+# ❌ BỊ CHẶN (401 Unauthorized): key_user_b KHÔNG có quyền gọi Analytics
+curl -k -H "Timestamp: ${NOW}" \
+     -H "Authorization: Bearer ${TOKEN_B}" \
+     "https://analytics.local:8443/api/v1/sales/daily?days=7"
+
+# ✅ THÀNH CÔNG (200 OK): key_user_b có quyền gọi Branding
+curl -k -H "Timestamp: ${NOW}" \
+     -H "Authorization: Bearer ${TOKEN_B}" \
+     "https://branding.local:8443/api/v1/branding/overview"
 ```
 
-#### Thí nghiệm 2.5.4 — Kẻ xấu dùng key giả
+#### Thí nghiệm 2.5.3 — Khách VIP (`key_user_vip`: có quyền trên cả hai dịch vụ)
 
 ```bash
-# ❌ BỊ CHẶN 403 trên tất cả dịch vụ — không vào được đâu cả
-curl -H "X-Client-Key: hacker_fake_key_123" "http://analytics.local:8080/api/v1/sales/daily"
-curl -H "X-Client-Key: hacker_fake_key_123" "http://branding.local:8080/"
+# 1. Tính toán chữ ký SHA-256 cho Khách VIP
+NOW=$(date +%s)
+TOKEN_VIP=$(echo -n "key_user_vip${NOW}" | sha256sum | awk '{print $1}')
+
+# ✅ THÀNH CÔNG trên cả hai dịch vụ (200 OK)
+curl -k -H "Timestamp: ${NOW}" -H "Authorization: Bearer ${TOKEN_VIP}" \
+     "https://analytics.local:8443/api/v1/sales/daily?days=7"
+
+curl -k -H "Timestamp: ${NOW}" -H "Authorization: Bearer ${TOKEN_VIP}" \
+     "https://branding.local:8443/api/v1/branding/overview"
+```
+
+#### Thí nghiệm 2.5.4 — Kẻ xấu dùng key giả hoặc Timestamp quá hạn
+
+```bash
+# Kẻ xấu dùng token giả mạo:
+curl -k -i -H "Timestamp: $(date +%s)" \
+     -H "Authorization: Bearer fake_sha256_token_123456" \
+     "https://analytics.local:8443/api/v1/sales/daily"
+# ❌ Trả về: HTTP/1.1 401 Unauthorized
+
+# Gửi Timestamp cũ quá hạn (> 60 giây - chống Replay Attack):
+curl -k -i -H "Timestamp: 1600000000" \
+     -H "Authorization: Bearer ${TOKEN_A}" \
+     "https://analytics.local:8443/api/v1/sales/daily"
+# ❌ Trả về: HTTP/1.1 401 Unauthorized (Timestamp expired)
 ```
 
 ---
 
 ### 6. Thực hành bằng Postman (GUI)
 
-#### Bước 6.1 — Cài đặt Request trong Postman
+Để gửi chữ ký SHA-256 tự động trên Postman mà không phải tính tay:
 
-1. Mở Postman → Tạo Request mới → Chọn method `GET`.
-2. Nhập URL: `http://analytics.local:8080/api/v1/sales/daily?days=7`
-3. Chuyển sang tab **Headers**, thêm:
+#### Bước 6.1 — Cài đặt Pre-request Script trong Postman:
+Vào tab **Pre-request Script** của Request hoặc Collection, dán đoạn mã JavaScript sau:
 
-   | Key | Value |
-   |---|---|
-   | `X-Client-Key` | `key_user_a` |
+```javascript
+// 1. Lấy Unix timestamp hiện tại (giây)
+const timestamp = Math.floor(Date.now() / 1000);
+pm.variables.set("timestamp", timestamp);
 
-4. Bấm **Send**.
+// 2. Tính SHA256(secret_key + timestamp)
+const secretKey = "key_user_a"; // hoặc key_user_b, key_user_vip
+const token = CryptoJS.SHA256(secretKey + timestamp).toString();
+pm.variables.set("token", token);
+```
 
-#### Bước 6.2 — Tạo Collection để test nhanh các kịch bản
+#### Bước 6.2 — Cài đặt Headers trong Postman:
+Chuyển sang tab **Headers**, thêm 2 headers:
 
-Tạo 1 Postman Collection tên **"Analytics Gateway - Subdomain Test"**, bên trong tạo các request:
+| Key | Value |
+|---|---|
+| `Timestamp` | `{{timestamp}}` |
+| `Authorization` | `Bearer {{token}}` |
 
-| Tên Request | URL | Header `X-Client-Key` | Kết quả kỳ vọng |
-|---|---|---|---|
-| Khách A → Analytics | `http://analytics.local:8080/api/v1/sales/daily` | `key_user_a` | `200 OK` |
-| Khách A → Branding | `http://branding.local:8080/` | `key_user_a` | `403 Forbidden` |
-| Khách B → Analytics | `http://analytics.local:8080/api/v1/sales/daily` | `key_user_b` | `403 Forbidden` |
-| Khách B → Branding | `http://branding.local:8080/` | `key_user_b` | `200 OK` |
-| VIP → Analytics | `http://analytics.local:8080/api/v1/sales/daily` | `key_user_vip` | `200 OK` |
-| VIP → Branding | `http://branding.local:8080/` | `key_user_vip` | `200 OK` |
-| Key giả → Anywhere | `http://analytics.local:8080/api/v1/sales/daily` | `hacker_key` | `403 Forbidden` |
+Bấm **Send** $\rightarrow$ Postman sẽ tự động tính toán token SHA-256 mới cho mỗi lần bấm!
 
 ---
 
 ### 7. Cách thêm / thu hồi quyền một khách hàng
 
-Toàn bộ việc quản lý quyền nằm trong file [`gateway/nginx.conf`](gateway/nginx.conf) phần `map`.
+Trong mô hình **Phân quyền phi tập trung (Decentralized Auth - Phương án A)**:
+Việc quản lý quyền thuộc về từng Service thông qua biến môi trường (Config/Secret), **hoàn toàn không cần sửa NGINX hay restart Gateway**:
 
-#### Thêm khách hàng mới (Công ty C, chỉ có quyền Analytics):
-```nginx
-map $http_x_client_key $allow_analytics {
-    default              0;
-    "key_user_a"         1;
-    "key_user_vip"       1;
-    "key_company_c_xyz"  1;   # ← Thêm dòng này
-}
-```
+- File [`docker-compose.yml`](docker-compose.yml):
+  ```yaml
+  # Muốn cấp quyền cho Khách C vào Analytics:
+  ANALYTICS_API_KEYS: "key_user_a,key_user_vip,key_user_c"
 
-#### Thu hồi quyền khi key bị lộ (Khách A làm lộ key lên GitHub):
-```nginx
-map $http_x_client_key $allow_analytics {
-    default              0;
-    # "key_user_a"       1;   # ← Comment lại hoặc xóa dòng này (vô hiệu hóa ngay)
-    "key_user_a_v2"      1;   # ← Cấp key mới cho Khách A
-    "key_user_vip"       1;
-}
-```
-
-Sau khi sửa file, **reload NGINX ngay lập tức** (không cần tắt container):
-```bash
-docker exec analytics_gateway nginx -s reload
-```
-
-> **Lưu ý:** Chỉ cần reload NGINX — các container FastAPI và ClickHouse vẫn chạy bình thường,
-> không có downtime, không ảnh hưởng đến các khách hàng khác đang gọi API.
+  # Muốn thu hồi quyền của Khách A:
+  ANALYTICS_API_KEYS: "key_user_vip,key_user_c"
+  ```
+- Trên Kubernetes: Chỉ cần cập nhật Kubernetes Secret (`ANALYTICS_API_KEYS` trong Secret của service), không cần cấu hình lại Ingress.
 
 ---
 
@@ -366,8 +393,8 @@ Khi bạn đã hiểu bản chất ở Nấc 1 & Nấc 2, bạn sẽ thấy Nấ
 ┌─────────────────────────────────────────────────────────────┐
 │ 1. INGRESS (k8s/ingress.yaml)                               │
 │    - Bản chất là NGINX Ingress Controller                   │
-│    - Kiểm tra header X-API-Key, chặn spam (Rate Limit)     │
-│    - Chuyển tiếp request vào Service                        │
+│    - SSL Termination, Subdomain Routing, Rate Limiting      │
+│    - Chuyển tiếp request vào Service tương ứng              │
 └──────────────────────────────┬──────────────────────────────┘
                                │ (Port 80)
                                ▼
@@ -455,10 +482,11 @@ kubectl apply -f k8s/namespace.yaml
 # 2. Tạo ConfigMap lưu cấu hình không nhạy cảm (Port, DB name, Workers...)
 kubectl apply -f k8s/configmap.yaml -n analytics
 
-# 3. Tạo Secret lưu mật khẩu và API Keys
+# 3. Tạo Secret lưu mật khẩu và API Keys cho từng service
 # Cách tốt nhất (Bảo mật): Tạo trực tiếp bằng lệnh CLI, tránh lưu key vào file để không sợ lộ lên Git:
 kubectl create secret generic analytics-gateway-secret \
-  --from-literal=API_KEYS="demo-key-123,demo-key-456" \
+  --from-literal=ANALYTICS_API_KEYS="key_user_a,key_user_vip,demo-key-123" \
+  --from-literal=BRANDING_API_KEYS="key_user_b,key_user_vip" \
   --from-literal=CLICKHOUSE_HOST="localhost" \
   --from-literal=CLICKHOUSE_PASSWORD="" \
   -n analytics \
@@ -470,6 +498,14 @@ kubectl apply -f k8s/api-deployment.yaml
 
 # 5. Tạo Service (Bộ cân bằng tải nội bộ)
 kubectl apply -f k8s/api-service.yaml
+
+# 5.5 Tạo Secret TLS chứa chứng chỉ SSL cho HTTPS (BẮT BUỘC trước khi tạo Ingress):
+# Lệnh này đọc 2 file cert và key từ máy tính nạp vào etcd của K8s.
+# Dù Pod NGINX có chết hay restart bao nhiêu lần, Secret trong etcd vẫn giữ nguyên 100%!
+kubectl create secret tls gateway-tls-secret \
+  --cert=gateway/certs/nginx.crt \
+  --key=gateway/certs/nginx.key \
+  -n analytics
 
 # 6. Tạo Ingress (API Gateway NGINX)
 kubectl apply -f k8s/ingress.yaml
@@ -532,9 +568,14 @@ kubectl describe pod <tên-pod> -n analytics
    ```bash
    echo "$(minikube ip) analytics.local" | sudo tee -a /etc/hosts
    ```
-3. Gọi API qua Ingress Gateway:
+3. Gọi API qua Ingress Gateway (với chữ ký SHA-256 + Timestamp):
    ```bash
-   curl -H "X-API-Key: demo-key-123" "http://analytics.local/api/v1/sales/daily?days=7"
+   NOW=$(date +%s)
+   TOKEN=$(echo -n "demo-key-123${NOW}" | sha256sum | awk '{print $1}')
+
+   curl -H "Timestamp: ${NOW}" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        "http://analytics.local/api/v1/sales/daily?days=7"
    ```
    *(Request đi qua: Ingress NGINX ──► Service ──► chia tải ngẫu nhiên vào 1 trong 2 Pod FastAPI!)*
 

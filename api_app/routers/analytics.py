@@ -1,11 +1,8 @@
 """
 Analytics router — all business endpoints live here.
 
-API Key authentication is handled at two levels:
-  1. NGINX Ingress (rate limit + header presence check) — infra level.
-  2. This dependency (validate key value)                — app level.
-
-This double-layer is a good learning example of "defence in depth".
+Sử dụng AnalyticsAuth: Tự động thẩm định Timestamp + SHA256(key + timestamp)
+đối chiếu với danh sách ANALYTICS_API_KEYS của service Analytics.
 """
 
 from __future__ import annotations
@@ -13,65 +10,13 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from api_app import database
+from api_app.auth import AnalyticsAuth
 
 router = APIRouter()
-
-# ── API Key validation ─────────────────────────────────────────────────────────
-import os
-import secrets
-import logging
-
-logger = logging.getLogger("analytics-gateway")
-
-def _get_valid_keys() -> set[str]:
-    """
-    Đọc danh sách API Keys hợp lệ từ biến môi trường (K8s Secret hoặc .env).
-    Chuẩn Production (Fail-Fast): Không bao giờ hardcode key mặc định trong code.
-    Nếu thiếu biến môi trường, server sẽ dừng và báo lỗi bảo mật ngay lập tức.
-    """
-    raw = os.getenv("API_KEYS", "").strip()
-    if not raw:
-        raise RuntimeError(
-            "CRITICAL SECURITY CONFIGURATION: The 'API_KEYS' environment variable "
-            "is required and cannot be empty! Please configure it in your K8s Secret or .env file."
-        )
-    return set(filter(None, [k.strip() for k in raw.split(",")]))
-
-
-async def require_api_key(x_api_key: Annotated[str | None, Header()] = None):
-    """
-    FastAPI dependency that validates the X-API-Key header.
-    NGINX Ingress already blocks requests without the header;
-    this layer validates the *value* using constant-time comparison
-    (secrets.compare_digest) to eliminate Timing Attack vulnerabilities.
-    """
-    if not x_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key. Pass a valid X-API-Key header.",
-        )
-
-    valid_keys = _get_valid_keys()
-
-    # Constant-time comparison chống Timing Attack
-    is_valid = any(
-        secrets.compare_digest(x_api_key, valid_key)
-        for valid_key in valid_keys
-    )
-
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key. Pass a valid X-API-Key header.",
-        )
-    return x_api_key
-
-
-Auth = Annotated[str, Depends(require_api_key)]
 
 # ── Response schemas ───────────────────────────────────────────────────────────
 
@@ -105,7 +50,7 @@ class RegionSummaryRow(BaseModel):
     description="Aggregate daily orders & revenue. Query ClickHouse `orders` table.",
 )
 async def daily_sales(
-    _key: Auth,
+    _client: AnalyticsAuth,
     days: Annotated[int, Query(ge=1, le=90, description="Number of past days")] = 30,
 ):
     sql = """
@@ -129,7 +74,7 @@ async def daily_sales(
     summary="Top products by revenue",
 )
 async def top_products(
-    _key: Auth,
+    _client: AnalyticsAuth,
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
     days: Annotated[int, Query(ge=1, le=90)] = 30,
 ):
@@ -155,7 +100,7 @@ async def top_products(
     summary="Sales summary by region",
 )
 async def region_summary(
-    _key: Auth,
+    _client: AnalyticsAuth,
     days: Annotated[int, Query(ge=1, le=90)] = 30,
 ):
     sql = """
@@ -171,4 +116,3 @@ async def region_summary(
     """
     rows = await database.query(sql, {"days": days})
     return rows
-
