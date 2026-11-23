@@ -48,7 +48,7 @@ jobs:
         run: ruff check api_app/
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -v --tb=short
         # Tests run with mocked ClickHouse so no DB needed in CI
 
   # ── Job 2: Build & Push Docker image ─────────────────────────────────────────
