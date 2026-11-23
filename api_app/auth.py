@@ -12,14 +12,14 @@ Chuẩn Production tuyệt đối:
 
 from __future__ import annotations
 
-import os
-import time
-import secrets
 import hashlib
 import logging
+import os
+import secrets
+import time
 from typing import Annotated
 
-from fastapi import Request, Header, HTTPException, status, Depends
+from fastapi import Depends, Header, HTTPException, Request, status
 
 logger = logging.getLogger("analytics-gateway.auth")
 
@@ -105,7 +105,7 @@ def require_service_auth(service_name: str, env_var: str):
 
         # ── 3. ĐỐI CHIẾU CHỮ KÝ: token == sha256("{secret_key}{timestamp}") ──
         for secret_key in valid_keys:
-            expected = hashlib.sha256(f"{secret_key}{timestamp}".encode("utf-8")).hexdigest()
+            expected = hashlib.sha256(f"{secret_key}{timestamp}".encode()).hexdigest()
             if secrets.compare_digest(raw_token.lower(), expected.lower()):
                 return f"authenticated_{service_name}_{secret_key[:8]}"
 

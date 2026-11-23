@@ -5,6 +5,7 @@ Branding service router (mô phỏng service độc lập thứ 2).
 from __future__ import annotations
 
 from fastapi import APIRouter
+
 from api_app.auth import BrandingAuth
 
 router = APIRouter(prefix="/branding", tags=["Branding Service"])

@@ -3,16 +3,17 @@ Analytics Serving Gateway - FastAPI Application
 Entry point: starts server, registers routers, adds middleware
 """
 
+import logging
 import os
 import time
-import logging
-from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 
-from api_app.routers import analytics, branding
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse
+
 from api_app.database import ping_clickhouse
+from api_app.routers import analytics, branding
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -104,7 +105,7 @@ async def readyz():
     try:
         await ping_clickhouse()
         return {"status": "ready", "db": "clickhouse:ok"}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"ClickHouse unreachable: {exc}",

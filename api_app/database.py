@@ -6,8 +6,8 @@ Connection params are read from environment variables so they can be
 injected as K8s Secrets without changing code.
 """
 
-import os
 import asyncio
+import os
 from functools import lru_cache
 
 import clickhouse_connect

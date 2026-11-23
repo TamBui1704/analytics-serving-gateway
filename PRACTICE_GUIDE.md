@@ -128,12 +128,13 @@ HTTP/1.1 401 Unauthorized
 *(Request bị từ chối ngay lập tức, bảo vệ an toàn cho cơ sở dữ liệu ClickHouse).*
 
 #### Thí nghiệm 2.3: Test Rate Limiting (Chống Spam / DDoS)
-Trong file [`gateway/nginx.conf`](gateway/nginx.conf), chúng ta quy định tối đa **10 requests/giây**. Hãy chạy vòng lặp gửi dồn dập 25 requests:
+Trong file [`gateway/nginx.conf`](gateway/nginx.conf), chúng ta quy định tốc độ **10 requests/giây**, cho phép chịu tải đột ngột với bộ đệm `burst=20`.
+Hãy chạy vòng lặp gửi dồn dập 40 requests để làm cạn bộ đệm burst:
 ```bash
 NOW=$(date +%s)
 TOKEN=$(echo -n "demo-key-123${NOW}" | sha256sum | awk '{print $1}')
 
-for i in {1..25}; do
+for i in {1..40}; do
   curl -s -o /dev/null -w "Req $i: HTTP %{http_code}\n" \
     -H "Timestamp: ${NOW}" \
     -H "Authorization: Bearer ${TOKEN}" \
@@ -141,8 +142,8 @@ for i in {1..25}; do
 done
 ```
 👉 **Hiện tượng**: 
-- Các request đầu: `HTTP 200`
-- Các request dồn dập vượt quá ngưỡng giới hạn: `HTTP 503` hoặc `HTTP 429` do NGINX Rate Limiting chặn đứng!
+- Các request đầu (khoảng 1 đến 23): `HTTP 200` (được xử lý nhờ dung lượng `burst=20` ban đầu).
+- Các request tiếp theo (từ 24 đến 40): Xuất hiện hàng loạt **`HTTP 503`** do NGINX Rate Limiting đã cạn buffer và chặn đứng request spam!
 
 ---
 
@@ -448,7 +449,7 @@ sudo install minikube-linux-amd64 /usr/local/bin/minikube
 #### Bước 2.2: Khởi động Minikube và bật các Addon cần thiết
 ```bash
 # Bật Minikube chạy bằng driver docker
-minikube start --driver=docker
+minikube start --driver=docker --preload=false
 
 # Bật NGINX Ingress Controller (để dùng k8s/ingress.yaml)
 minikube addons enable ingress
@@ -457,17 +458,77 @@ minikube addons enable ingress
 minikube addons enable metrics-server
 ```
 
-#### Bước 2.3: Nạp image FastAPI vào Minikube
-Vì image `analytics-api:v1` đang nằm ở Docker máy thật, ta nạp thẳng vào Minikube mà không cần đẩy lên mạng:
-```bash
-# 1. Build image từ code hiện tại (nếu chưa build)
-docker build -t analytics-api:v1 .
+#### Bước 2.3: Chuẩn bị Docker Image cho K8s (2 Cách: Máy Local hoặc Đẩy lên Git/GHCR)
 
-# 2. Đưa image vào trong cụm Minikube
-minikube image load analytics-api:v1
-```
+Để K8s có thể chạy được Pod FastAPI, nó cần lấy Docker Image từ một nơi nào đó. Bạn có thể chọn **1 trong 2 cách** sau tùy nhu cầu:
 
-*(Lưu ý nhỏ: Trong file `k8s/api-deployment.yaml`, bạn sửa dòng `image:` thành `analytics-api:v1` và `imagePullPolicy: IfNotPresent` để K8s dùng ngay image vừa nạp).*
+---
+
+##### 🟢 CÁCH 1: Chạy Image trực tiếp từ máy (Nhanh nhất khi Dev/Test Local - Không cần đẩy lên mạng)
+
+Cách này phù hợp khi bạn đang viết code trên máy, muốn kiểm thử ngay mà không cần kết nối Internet hay tạo tài khoản GitHub Container Registry:
+
+1. **Build image từ mã nguồn hiện tại:**
+   ```bash
+   docker build -t analytics-api:latest .
+   ```
+2. **Nạp thẳng image từ Docker host vào cụm Minikube:**
+   ```bash
+   minikube image load analytics-api:latest
+   ```
+   *(Kiểm tra xem Minikube đã nhận image chưa: `minikube image ls | grep analytics-api`)*
+
+3. **Cập nhật file `k8s/api-deployment.yaml`:**
+   Mở file `k8s/api-deployment.yaml` (khoảng dòng 44-45), sửa phần `image` thành:
+   ```yaml
+   image: analytics-api:latest
+   imagePullPolicy: Never   # Bắt K8s dùng ngay image nội bộ vừa nạp, không tìm trên mạng
+   ```
+
+---
+
+##### 🚀 CÁCH 2: Đẩy Image lên GitHub Container Registry (GHCR) rồi cho K8s kéo về (Chuẩn Production / CI-CD)
+
+> 💡 **Khái niệm:** Git chỉ quản lý mã nguồn (code). Docker image là file binary đóng gói nên được lưu trữ tại **Container Registry**. GitHub cung cấp sẵn dịch vụ Registry miễn phí tại địa chỉ `ghcr.io` (GitHub Container Registry).
+
+Bạn có thể đưa image lên GHCR bằng **2 phương pháp**:
+
+###### Phương pháp A: Tự động hoàn toàn bằng GitHub Actions (Khuyên dùng)
+Dự án đã có sẵn pipeline CI/CD tại `.github/workflows/ci-cd.yml`:
+1. Bạn chỉ cần commit và đẩy mã nguồn lên nhánh `main` của GitHub repo của bạn:
+   ```bash
+   git add .
+   git commit -m "feat: setup k8s deployment"
+   git push origin main
+   ```
+2. GitHub Actions sẽ tự động: Chạy test ruff/pytest ➔ Build Docker Image ➔ Đăng nhập GHCR ➔ Đẩy image lên `ghcr.io/<your-github-username>/analytics-serving-gateway:latest`.
+3. Bạn vào mục **Packages** trên trang cá nhân GitHub, chuyển quyền hiển thị của Package sang **Public** (để Minikube kéo về không bị hỏi mật khẩu).
+
+###### Phương pháp B: Build và Push bằng tay từ Terminal máy bạn
+Nếu muốn chủ động đẩy bằng tay từ máy tính:
+1. **Tạo GitHub Token (PAT):**
+   * Vào GitHub ➔ **Settings** ➔ **Developer settings** ➔ **Personal access tokens (Tokens classic)** ➔ **Generate new token**.
+   * Tích chọn quyền: `write:packages`, `read:packages`, `delete:packages`.
+2. **Đăng nhập Docker vào GHCR trên terminal máy bạn:**
+   ```bash
+   echo "PAT_TOKEN_VỪA_TẠO" | docker login ghcr.io -u <tên_github_viết_thường> --password-stdin
+   ```
+3. **Build và gắn thẻ (Tag) đúng chuẩn (Lưu ý: Tên username BẮT BUỘC viết thường):**
+   ```bash
+   # Ví dụ username github của bạn là: tambt
+   docker build -t ghcr.io/<tên_github_viết_thường>/analytics-serving-gateway:latest .
+   ```
+4. **Đẩy (Push) image lên GitHub:**
+   ```bash
+   docker push ghcr.io/<tên_github_viết_thường>/analytics-serving-gateway:latest
+   ```
+5. **Cập nhật file `k8s/api-deployment.yaml`:**
+   Mở file `k8s/api-deployment.yaml`, điền tên image thật của bạn:
+   ```yaml
+   image: ghcr.io/<tên_github_viết_thường>/analytics-serving-gateway:latest
+   imagePullPolicy: Always
+   ```
+   *(Nếu Package ở chế độ Private, xem thêm hướng dẫn tạo `imagePullSecret` trong tài liệu).*
 
 ---
 
