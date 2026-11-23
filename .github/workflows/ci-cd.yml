@@ -101,11 +101,14 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ── Job 3: Deploy to Kubernetes ───────────────────────────────────────────────
+  # Tạm tắt tự động Deploy từ GitHub vì cụm Minikube đang chạy trên máy local (không thể truy cập từ Internet).
+  # GitHub Actions chỉ đóng vai trò CI (Test -> Build -> Push Image lên GHCR).
+  # Khi nào bạn có cụm K8s Cloud thật (EKS/GKE), đổi thành: if: github.ref == 'refs/heads/main'
   deploy:
     name: 🚀 Deploy to K8s
     runs-on: ubuntu-latest
     needs: build
-    if: github.ref == 'refs/heads/main'
+    if: false
     environment: production       # Requires manual approval (configure in GitHub)
 
     steps:
