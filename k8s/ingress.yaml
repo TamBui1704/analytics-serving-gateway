@@ -19,8 +19,9 @@ metadata:
     nginx.ingress.kubernetes.io/limit-rps: "10"
     nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
 
-    # ── Chuyển hướng HTTP sang HTTPS ──────────────────────────────────────────
+    # ── Ép buộc tự động chuyển hướng HTTP sang HTTPS (HTTP 308 Permanent Redirect) ──
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 
     # ── Cấu hình Timeout & Kích thước Request ─────────────────────────────────
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"

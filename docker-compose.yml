@@ -21,7 +21,7 @@ services:
     image: clickhouse/clickhouse-server:24.8-alpine
     container_name: analytics_clickhouse
     ports:
-      - "127.0.0.1:8123:8123"   # Chỉ bind vào localhost, không mở ra toàn mạng (0.0.0.0) tránh hacker scan port
+      - "8123:8123"   # Mở port cho cả máy host và Minikube (host.minikube.internal) gọi vào
     environment:
       CLICKHOUSE_DB: analytics
       CLICKHOUSE_USER: default

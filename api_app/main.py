@@ -59,6 +59,11 @@ async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
+
+    # Chuẩn Production: Mute log của health probe nếu 200 OK để chống spam log
+    if request.url.path in ("/healthz", "/readyz") and response.status_code == 200:
+        return response
+
     logger.info(
         "%s %s → %d (%.1fms)",
         request.method,

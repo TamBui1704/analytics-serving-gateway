@@ -532,37 +532,63 @@ Nếu muốn chủ động đẩy bằng tay từ máy tính:
 
 ---
 
-### 3. Các bước triển khai (Deploy) toàn bộ dự án lên K8s
+### 3. Phân biệt Cấu hình (ConfigMap) và Bảo mật (Secret) & Triển khai lên K8s
 
-Thực hiện áp dụng các file YAML theo đúng thứ tự:
+> 💡 **Triết lý 12-Factor App & An toàn thông tin:**
+> * **ConfigMap (`k8s/configmap.yaml`):** Lưu trữ cấu hình **KHÔNG nhạy cảm** (Port `8123`, DB `analytics`, số `WORKERS`, danh sách `CORS_ORIGINS`). File này **an toàn 100% để commit lên Git**.
+> * **Secret (`k8s/secret.yaml`):** Lưu trữ thông tin **NHẠY CẢM** (API Keys, Mật khẩu Database, Chứng chỉ SSL). File này **BẮT BUỘC nằm trong `.gitignore`** để tránh rò rỉ lên mạng.
+> * **File mẫu (`k8s/secret.yaml.example`):** Là bản vẽ thiết kế mẫu (Template) chứa key mẫu, được đẩy lên Git để các thành viên khác trong team biết cần phải điền những biến môi trường bí mật nào khi dựng dự án.
+>
+> Trong `k8s/api-deployment.yaml`, cả ConfigMap và Secret được nạp đồng thời vào Pod thông qua khối `envFrom`:
+> ```yaml
+> envFrom:
+>   - configMapRef:
+>       name: analytics-gateway-config
+>   - secretRef:
+>       name: analytics-gateway-secret
+> ```
 
+---
+
+#### Các bước triển khai thực tế theo đúng thứ tự:
+
+##### Bước 3.1: Đảm bảo Database ClickHouse đang chạy trên Docker máy bạn
+Vì ứng dụng FastAPI có tính năng kiểm tra sức khỏe (*Readiness Probe* gọi `/readyz`), nếu ClickHouse chưa bật thì Pod K8s sẽ báo lỗi 503 và từ chối nhận request:
+```bash
+docker compose up -d clickhouse
+```
+
+##### Bước 3.2: Áp dụng các file cấu hình K8s
 ```bash
 # 1. Tạo "khu vực riêng" (Namespace) cho dự án
 kubectl apply -f k8s/namespace.yaml
 
-# 2. Tạo ConfigMap lưu cấu hình không nhạy cảm (Port, DB name, Workers...)
+# 2. Tạo ConfigMap (Cấu hình chung: Port, DB Name, CORS...)
 kubectl apply -f k8s/configmap.yaml -n analytics
 
-# 3. Tạo Secret lưu mật khẩu và API Keys cho từng service
-# Cách tốt nhất (Bảo mật): Tạo trực tiếp bằng lệnh CLI, tránh lưu key vào file để không sợ lộ lên Git:
+# 3. Tạo Secret (Khóa bí mật: API Keys, Host, Password...)
+# Có 2 cách tạo Secret:
+#
+# Cách A (Khuyên dùng - Nhanh gọn qua CLI):
 kubectl create secret generic analytics-gateway-secret \
   --from-literal=ANALYTICS_API_KEYS="key_user_a,key_user_vip,demo-key-123" \
   --from-literal=BRANDING_API_KEYS="key_user_b,key_user_vip" \
-  --from-literal=CLICKHOUSE_HOST="localhost" \
+  --from-literal=CLICKHOUSE_HOST="host.minikube.internal" \
   --from-literal=CLICKHOUSE_PASSWORD="" \
   -n analytics \
   --dry-run=client -o yaml | kubectl apply -f -
-# (Hoặc nếu dùng file: copy k8s/secret.yaml.example thành k8s/secret.yaml - file này đã được .gitignore)
+#
+# Cách B (Dùng file YAML):
+# cp k8s/secret.yaml.example k8s/secret.yaml
+# kubectl apply -f k8s/secret.yaml -n analytics
 
-# 4. Tạo Deployment (Khởi chạy 2 Pod FastAPI)
+# 4. Tạo Deployment (Khởi chạy 2 Pod FastAPI tự động nạp ConfigMap & Secret)
 kubectl apply -f k8s/api-deployment.yaml
 
 # 5. Tạo Service (Bộ cân bằng tải nội bộ)
 kubectl apply -f k8s/api-service.yaml
 
 # 5.5 Tạo Secret TLS chứa chứng chỉ SSL cho HTTPS (BẮT BUỘC trước khi tạo Ingress):
-# Lệnh này đọc 2 file cert và key từ máy tính nạp vào etcd của K8s.
-# Dù Pod NGINX có chết hay restart bao nhiêu lần, Secret trong etcd vẫn giữ nguyên 100%!
 kubectl create secret tls gateway-tls-secret \
   --cert=gateway/certs/nginx.crt \
   --key=gateway/certs/nginx.key \
@@ -577,6 +603,16 @@ kubectl apply -f k8s/hpa.yaml
 # 8. Tạo NetworkPolicy (Tường lửa nội bộ cô lập Pod)
 kubectl apply -f k8s/network-policy.yaml
 ```
+
+##### Bước 3.3: Kiểm tra Pod đã nhận đủ cấu hình từ ConfigMap & Secret chưa
+```bash
+# Lấy tên một Pod đang chạy
+POD_NAME=$(kubectl get pods -n analytics -l app=analytics-api -o jsonpath="{.items[0].metadata.name}")
+
+# Kiểm tra các biến môi trường bên trong Pod
+kubectl exec -it $POD_NAME -n analytics -- env | grep -E "CLICKHOUSE|API_KEY|CORS"
+```
+*(Bạn sẽ thấy cả biến từ ConfigMap như `CLICKHOUSE_PORT`, `CORS_ORIGINS` và biến từ Secret như `ANALYTICS_API_KEYS`, `CLICKHOUSE_HOST` đều đã hiện diện đầy đủ bên trong Pod).*
 
 ---
 
@@ -621,24 +657,42 @@ kubectl describe pod <tên-pod> -n analytics
 * **Hiện tượng:** K8s sẽ bật Pod mới phiên bản v2 lên trước. Khi Pod v2 vượt qua bài kiểm tra `/healthz` và `/readyz` an toàn, K8s mới bắt đầu tắt dần Pod v1 cũ. Người dùng gọi API liên tục sẽ **không bị rớt một request nào**!
 
 #### Kịch bản 3: Thử nghiệm gọi qua Ingress Gateway trên Minikube
-1. Lấy địa chỉ IP của cụm Minikube:
+
+> ⚠️ **LƯU Ý CỰC KỲ QUAN TRỌNG VỀ CỔNG (PORT):**
+> * **Ở Nấc 2 (Docker Compose NGINX):** Cổng HTTPS là `:8443` và HTTP là `:8080`.
+> * **Ở Nấc 3 (Kubernetes Ingress):** Sử dụng các cổng tiêu chuẩn của Web:
+>   * HTTP chạy trên cổng **`80`** (không cần gõ `:80`).
+>   * HTTPS chạy trên cổng **`443`** (không cần gõ `:443`).
+>   * ❌ **TUYỆT ĐỐI KHÔNG GÕ CỔNG `:8443`** trên Minikube! Vì trên Minikube, cổng `8443` là của **Kubernetes API Server** (nếu gọi vào đây bạn sẽ bị K8s báo lỗi `401 Unauthorized`).
+
+1. **Lấy địa chỉ IP của cụm Minikube:**
    ```bash
    minikube ip
+   # Ví dụ: 192.168.49.2
    ```
-2. Thêm IP đó vào `/etc/hosts` cho tên miền `analytics.local`:
+
+2. **Cập nhật IP Minikube vào `/etc/hosts` cho 2 tên miền `analytics.local` và `branding.local`:**
    ```bash
-   echo "$(minikube ip) analytics.local" | sudo tee -a /etc/hosts
+   echo "$(minikube ip) analytics.local branding.local" | sudo tee -a /etc/hosts
    ```
-3. Gọi API qua Ingress Gateway (với chữ ký SHA-256 + Timestamp):
+
+3. **Gọi API bằng HTTPS bảo mật SSL (Chuẩn Production - Port 443):**
    ```bash
    NOW=$(date +%s)
-   TOKEN=$(echo -n "demo-key-123${NOW}" | sha256sum | awk '{print $1}')
+   TOKEN_A=$(echo -n "key_user_a${NOW}" | sha256sum | awk '{print $1}')
 
-   curl -H "Timestamp: ${NOW}" \
-        -H "Authorization: Bearer ${TOKEN}" \
-        "http://analytics.local/api/v1/sales/daily?days=7"
+   curl -k -H "Timestamp: ${NOW}" \
+        -H "Authorization: Bearer ${TOKEN_A}" \
+        "https://analytics.local/api/v1/sales/daily?days=7"
    ```
-   *(Request đi qua: Ingress NGINX ──► Service ──► chia tải ngẫu nhiên vào 1 trong 2 Pod FastAPI!)*
+   *(Request đi qua: Ingress NGINX (Chấm dứt SSL) ──► Service (ClusterIP) ──► chia tải ngẫu nhiên vào 1 trong 2 Pod FastAPI!)*
+
+4. **Kiểm chứng tính năng Ép buộc chuyển hướng HTTPS (HTTP 308 Permanent Redirect):**
+   Nếu người dùng hoặc client cố tình gọi qua `http://` thông thường:
+   ```bash
+   curl -I "http://analytics.local/api/v1/sales/daily?days=7"
+   ```
+   **Kết quả:** Ingress sẽ không trả dữ liệu thô mà lập tức phản hồi mã **`HTTP/1.1 308 Permanent Redirect`** kèm Header `Location: https://analytics.local/...` để ép client chuyển sang HTTPS!
 
 ---
 
