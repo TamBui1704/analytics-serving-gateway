@@ -1,0 +1,57 @@
+# monitoring/prometheus/alert_rules.yml
+groups:
+  - name: analytics-api-alerts
+    rules:
+      # 1. Cảnh báo khi FastAPI service không phản hồi (Down)
+      - alert: AnalyticsApiDown
+        expr: up{job="analytics-api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: analytics-api
+        annotations:
+          summary: "Analytics API đang bị sập (DOWN)"
+          description: "Prometheus không thể scrape /metrics từ api_service:8000 trong hơn 30 giây."
+
+      # 2. Cảnh báo khi tỉ lệ lỗi 5xx vượt 5% trong 1 phút gần nhất
+      - alert: AnalyticsApiHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="analytics-api", status=~"5.."}[1m]))
+            /
+            clamp_min(sum(rate(http_requests_total{job="analytics-api"}[1m])), 1e-9)
+          ) > 0.05
+        for: 30s
+        labels:
+          severity: warning
+          service: analytics-api
+        annotations:
+          summary: "Tỉ lệ lỗi 5xx của Analytics API cao (> 5%)"
+          description: "Tỉ lệ request trả về mã 5xx hiện tại là {{ $value | humanizePercentage }}."
+
+      # 3. Cảnh báo khi độ trễ p95 vượt quá 1 giây trong 2 phút
+      - alert: AnalyticsApiHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="analytics-api"}[2m])) by (le)
+          ) > 1.0
+        for: 1m
+        labels:
+          severity: warning
+          service: analytics-api
+        annotations:
+          summary: "Độ trễ p95 của Analytics API vượt quá 1 giây"
+          description: "95% request đang mất hơn {{ $value | humanizeDuration }} để phản hồi."
+
+      # 4. Cảnh báo bảo mật khi lỗi 401 tăng bất thường (> 10 lần/phút)
+      - alert: AnalyticsApiAuthSpike
+        expr: sum(increase(http_requests_total{job="analytics-api", status="401"}[1m])) > 10
+        for: 15s
+        labels:
+          severity: warning
+          service: analytics-api
+        annotations:
+          summary: "Phát hiện nhiều lỗi xác thực 401 bất thường"
+          description: "Có {{ $value | printf \"%.0f\" }} request bị từ chối 401 trong 1 phút gần nhất (có thể do dò key hoặc đối tác cấu hình sai chữ ký)."
+

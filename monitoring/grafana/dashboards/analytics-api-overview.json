@@ -1,0 +1,689 @@
+{
+  "uid": "analytics-api-overview",
+  "title": "Analytics Serving Gateway - Overview & Logs",
+  "tags": ["analytics", "fastapi", "plg"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 12,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "entry_point",
+        "label": "Entry Point",
+        "type": "custom",
+        "query": "gateway,direct",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [
+          { "selected": true, "text": "All", "value": "$__all" },
+          { "selected": false, "text": "gateway", "value": "gateway" },
+          { "selected": false, "text": "direct", "value": "direct" }
+        ]
+      },
+      {
+        "name": "endpoint",
+        "label": "Endpoint",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(http_requests_total{job=\"analytics-api\"}, handler)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "refresh": 2,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "status",
+        "label": "HTTP Status",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(http_requests_total{job=\"analytics-api\"}, status)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "refresh": 2,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "search",
+        "label": "Search Log",
+        "type": "textbox",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "API Status",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "up{job=\"analytics-api\"}",
+          "legendFormat": "analytics-api"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "DOWN", "color": "red" },
+                "1": { "text": "UP", "color": "green" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Uptime (%)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "targets": [
+        {
+          "expr": "avg_over_time(up{job=\"analytics-api\"}[$__range]) * 100",
+          "legendFormat": "Uptime",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 99 },
+              { "color": "green", "value": 99.9 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Total Downtime",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "expr": "(1 - avg_over_time(up{job=\"analytics-api\"}[$__range])) * $__range_s",
+          "legendFormat": "Downtime",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 60 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total Requests",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service=\"api_service\"} |= \"\\\"request_id\\\"\" | json | entry_point =~ \"${entry_point:regex}\" | path =~ \"${endpoint:pipe}\" | status_code =~ \"${status:regex}\" |~ \"(?i)$search\" [$__range])) or vector(0)",
+          "legendFormat": "Requests",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Errors 4xx/5xx",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service=\"api_service\"} |= \"\\\"request_id\\\"\" | json | entry_point =~ \"${entry_point:regex}\" | path =~ \"${endpoint:pipe}\" | status_code =~ \"4..|5..\" | status_code =~ \"${status:regex}\" |~ \"(?i)$search\" [$__range])) or vector(0)",
+          "legendFormat": "Errors",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "P95 Latency",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"analytics-api\", handler=~\"$endpoint\"}[$__range])) by (le))",
+          "legendFormat": "p95",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "state-timeline",
+      "title": "API Uptime & Downtime Timeline (Rê chuột vào vạch đỏ để xem khoảng thời gian sập)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "up{job=\"analytics-api\"}",
+          "legendFormat": "analytics-api"
+        }
+      ],
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "center",
+        "rowHeight": 0.85,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "DOWN", "color": "red" },
+                "1": { "text": "UP", "color": "green" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "barchart",
+      "title": "Requests by Endpoint & Status (Stacked)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 11, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (path, status_code) (count_over_time({service=\"api_service\"} |= \"\\\"request_id\\\"\" | json | entry_point =~ \"${entry_point:regex}\" | path =~ \"${endpoint:pipe}\" | status_code =~ \"${status:regex}\" |~ \"(?i)$search\" [$__range]))",
+          "queryType": "instant"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "status_code",
+            "rowField": "path",
+            "valueField": "Value #A",
+            "emptyValue": "zero"
+          }
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "showValue": "auto",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "custom": {
+            "fillOpacity": 85,
+            "gradientMode": "none"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "^2.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "^4.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "^5.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "type": "piechart",
+      "title": "Traffic Share by HTTP Status",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 6, "x": 11, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (status_code) (count_over_time({service=\"api_service\"} |= \"\\\"request_id\\\"\" | json | entry_point =~ \"${entry_point:regex}\" | path =~ \"${endpoint:pipe}\" | status_code =~ \"${status:regex}\" |~ \"(?i)$search\" [$__range]))",
+          "legendFormat": "{{status_code}}",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "displayLabels": ["percent"],
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "values": ["value", "percent"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "^2.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "^4.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "^5.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Requests by Status & Endpoint",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 7, "x": 17, "y": 8 },
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (status_code, path) (count_over_time({service=\"api_service\"} |= \"\\\"request_id\\\"\" | json | entry_point =~ \"${entry_point:regex}\" | path =~ \"${endpoint:pipe}\" | status_code =~ \"${status:regex}\" |~ \"(?i)$search\" [$__range])))",
+          "queryType": "instant"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "status_code": 0,
+              "path": 1,
+              "Value #A": 2
+            },
+            "renameByName": {
+              "status_code": "Status",
+              "path": "Endpoint",
+              "Value #A": "Requests"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              { "id": "custom.width", "value": 75 },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "regex", "options": { "pattern": "^2.*", "result": { "color": "green" } } },
+                  { "type": "regex", "options": { "pattern": "^4.*", "result": { "color": "orange" } } },
+                  { "type": "regex", "options": { "pattern": "^5.*", "result": { "color": "red" } } }
+                ]
+              },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Requests" },
+            "properties": [
+              { "id": "custom.width", "value": 90 }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Request Rate (req/s) by Endpoint & Status",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (handler, status) (rate(http_requests_total{job=\"analytics-api\", handler=~\"$endpoint\", status=~\"$status\"}[1m]))",
+          "legendFormat": "{{handler}} [{{status}}]"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "API Latency Percentiles (p50 / p95)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"analytics-api\", handler=~\"$endpoint\"}[2m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"analytics-api\", handler=~\"$endpoint\"}[2m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "API Audit Log (Chi tiết từng Request - Dạng Bảng)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 23 },
+      "targets": [
+        {
+          "expr": "{service=\"api_service\"} |= \"\\\"request_id\\\"\" | json | entry_point =~ \"${entry_point:regex}\" | path =~ \"${endpoint:pipe}\" | status_code =~ \"${status:regex}\" |~ \"(?i)$search\"",
+          "queryType": "range",
+          "maxLines": 200
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": false,
+            "replace": true,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "level": true,
+              "path": true,
+              "response_size_bytes": true,
+              "user_agent": true
+            },
+            "indexByName": {
+              "started_at": 0,
+              "finished_at": 1,
+              "duration_ms": 2,
+              "entry_point": 3,
+              "status_code": 4,
+              "method": 5,
+              "full_url": 6,
+              "client_ip": 7,
+              "request_params": 8,
+              "response_body": 9,
+              "error_detail": 10,
+              "request_id": 11
+            },
+            "renameByName": {
+              "started_at": "Started At",
+              "finished_at": "Finished At",
+              "duration_ms": "Duration (ms)",
+              "entry_point": "Entry",
+              "status_code": "Status",
+              "method": "Method",
+              "full_url": "Full URL",
+              "client_ip": "Client IP",
+              "request_params": "Request Params",
+              "response_body": "Response Body",
+              "error_detail": "Error Detail",
+              "request_id": "Request ID"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": true,
+          "reducer": ["count"],
+          "countRows": true,
+          "enablePagination": true
+        },
+        "sortBy": [
+          {
+            "displayName": "Started At",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Started At" },
+            "properties": [{ "id": "custom.width", "value": 195 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Finished At" },
+            "properties": [{ "id": "custom.width", "value": 195 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration (ms)" },
+            "properties": [
+              { "id": "custom.width", "value": 105 },
+              { "id": "decimals", "value": 1 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              { "id": "custom.width", "value": 75 },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "range", "options": { "from": 200, "to": 299, "result": { "color": "green" } } },
+                  { "type": "range", "options": { "from": 400, "to": 499, "result": { "color": "orange" } } },
+                  { "type": "range", "options": { "from": 500, "to": 599, "result": { "color": "red" } } }
+                ]
+              },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Entry" },
+            "properties": [
+              { "id": "custom.width", "value": 85 },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "gateway": { "text": "gateway", "color": "blue" }, "direct": { "text": "direct", "color": "purple" } } }
+                ]
+              },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Method" },
+            "properties": [{ "id": "custom.width", "value": 75 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Full URL" },
+            "properties": [
+              { "id": "custom.width", "value": 280 },
+              { "id": "custom.inspect", "value": true }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Client IP" },
+            "properties": [{ "id": "custom.width", "value": 115 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Request Params" },
+            "properties": [
+              { "id": "custom.width", "value": 210 },
+              { "id": "custom.inspect", "value": true }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Response Body" },
+            "properties": [
+              { "id": "custom.width", "value": 240 },
+              { "id": "custom.inspect", "value": true }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Error Detail" },
+            "properties": [
+              { "id": "custom.width", "value": 240 },
+              { "id": "custom.inspect", "value": true }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Request ID" },
+            "properties": [{ "id": "custom.width", "value": 120 }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "type": "logs",
+      "title": "System Events & Crash Logs (Nguyên nhân Downtime / Restart / 502 / DB)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 35 },
+      "targets": [
+        {
+          "expr": "{service=~\"api_service|api_gateway|clickhouse\"} != \"\\\"request_id\\\"\" |~ \"(?i)(Shutting down|shutdown complete|Started server|Application startup|Traceback|CRITICAL|ERROR| 502 | 503 | 504 |Connection refused|unreachable|OOM|killed)\"",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}

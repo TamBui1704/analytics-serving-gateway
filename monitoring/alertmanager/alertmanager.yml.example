@@ -1,0 +1,35 @@
+# monitoring/alertmanager/alertmanager.yml.example
+# Copy file này thành monitoring/alertmanager/alertmanager.yml (đã gitignore)
+# rồi điền bot_token & chat_id thật của bạn để bật cảnh báo về Telegram.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: "telegram-alerts"
+  group_by: ["alertname", "service", "severity"]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+
+receivers:
+  - name: "telegram-alerts"
+    telegram_configs:
+      - bot_token: "YOUR_TELEGRAM_BOT_TOKEN"   # Lấy từ @BotFather
+        chat_id: 123456789                     # Số nguyên: ID cá nhân hoặc ID group (số âm -100...)
+        parse_mode: "HTML"
+        send_resolved: true
+        message: |
+          {{ if eq .Status "firing" }}🔴 <b>[CẢNH BÁO - FIRING]</b>{{ else }}✅ <b>[ĐÃ KHÔI PHỤC - RESOLVED]</b>{{ end }}
+          {{- range .Alerts }}
+          <b>Alert:</b> {{ .Labels.alertname }}
+          <b>Mức độ:</b> {{ .Labels.severity }}
+          <b>Service:</b> {{ .Labels.service }}
+          <b>Tóm tắt:</b> {{ .Annotations.summary }}
+          <b>Chi tiết:</b> {{ .Annotations.description }}
+          <b>Bắt đầu:</b> {{ .StartsAt.Local.Format "2006-01-02 15:04:05 (+07:00)" }}
+          {{- if eq $.Status "resolved" }}
+          <b>Kết thúc:</b> {{ .EndsAt.Local.Format "2006-01-02 15:04:05 (+07:00)" }}
+          {{- end }}
+          ────────────────────
+          {{- end }}
+

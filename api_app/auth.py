@@ -1,10 +1,12 @@
 """
 Authentication module for Analytics & Branding Services (Option A: Decentralized Auth).
 
-Chuẩn Production tuyệt đối:
-  - Header 'Timestamp': Unix timestamp (giây). Giới hạn hiệu lực trong ±60 giây chống Replay Attack.
-  - Header 'Authorization': 'Bearer <token>' với token = sha256("{secret_key}{timestamp}").
-  - Secret key KHÔNG BAO GIỜ được gửi trực tiếp qua mạng.
+Chuẩn Production (HMAC-SHA256 chống Replay & Cross-Endpoint Replay):
+  - Header 'Timestamp': Unix timestamp (giây). Giới hạn hiệu lực trong ±60 giây.
+  - Header 'Authorization': 'Bearer <signature>' với:
+        canonical = "{METHOD}:{PATH}:{TIMESTAMP}"   (VD: "GET:/api/v1/sales/daily:1795686000")
+        signature = HMAC-SHA256(secret_key, canonical)
+  - Secret key KHÔNG BAO GIỜ được gửi qua mạng và KHÔNG BAO GIỜ bị cắt/lộ ra response.
   - Mỗi service tự quản lý danh sách Key hợp lệ qua biến môi trường độc lập (Fail-Fast):
       * Service Analytics: ANALYTICS_API_KEYS
       * Service Branding: BRANDING_API_KEYS
@@ -13,6 +15,7 @@ Chuẩn Production tuyệt đối:
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -25,6 +28,12 @@ logger = logging.getLogger("analytics-gateway.auth")
 
 # Window thời gian hợp lệ cho Timestamp (mặc định 60 giây)
 TIMESTAMP_TOLERANCE_SECONDS = 60.0
+
+
+def compute_hmac_signature(secret_key: str, method: str, path: str, timestamp: str) -> str:
+    """Tính chữ ký HMAC-SHA256 gắn chặt với HTTP method, path và timestamp."""
+    canonical = f"{method.upper()}:{path}:{timestamp}".encode("utf-8")
+    return hmac.new(secret_key.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
 
 
 def get_service_keys(env_var: str) -> set[str]:
@@ -59,7 +68,7 @@ def require_service_auth(service_name: str, env_var: str):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=(
                     f"Missing 'Timestamp' header for {service_name} service. "
-                    "Production requires 'Timestamp' and 'Authorization: Bearer <sha256_token>'."
+                    "Production requires 'Timestamp' and 'Authorization: Bearer <hmac_sha256_signature>'."
                 ),
             )
 
@@ -82,7 +91,7 @@ def require_service_auth(service_name: str, env_var: str):
                 ),
             )
 
-        # ── 2. TRÍCH XUẤT TOKEN TỪ AUTHORIZATION HEADER ─────────────────────
+        # ── 2. TRÍCH XUẤT CHỮ KÝ TỪ AUTHORIZATION HEADER ────────────────────
         raw_token = ""
         if authorization:
             parts = authorization.strip().split()
@@ -99,19 +108,23 @@ def require_service_auth(service_name: str, env_var: str):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=(
                     f"Missing token in Authorization header for {service_name} service. "
-                    "Expected 'Authorization: Bearer <sha256_token>'."
+                    "Expected 'Authorization: Bearer <hmac_sha256_signature>'."
                 ),
             )
 
-        # ── 3. ĐỐI CHIẾU CHỮ KÝ: token == sha256("{secret_key}{timestamp}") ──
+        # ── 3. ĐỐI CHIẾU CHỮ KÝ HMAC-SHA256(key, METHOD:PATH:TIMESTAMP) ─────
+        method = request.method.upper()
+        path = request.url.path
         for secret_key in valid_keys:
-            expected = hashlib.sha256(f"{secret_key}{timestamp}".encode()).hexdigest()
+            expected = compute_hmac_signature(secret_key, method, path, timestamp)
             if secrets.compare_digest(raw_token.lower(), expected.lower()):
-                return f"authenticated_{service_name}_{secret_key[:8]}"
+                # Trả fingerprint một chiều (KHÔNG BAO GIỜ cắt hay làm lộ secret_key!)
+                key_fingerprint = hashlib.sha256(secret_key.encode("utf-8")).hexdigest()[:8]
+                return f"client_{service_name}_{key_fingerprint}"
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Unauthorized: Signature token is invalid or key has no permission for {service_name} service.",
+            detail=f"Unauthorized: HMAC signature is invalid or key has no permission for {service_name} service.",
         )
 
     return _verifier

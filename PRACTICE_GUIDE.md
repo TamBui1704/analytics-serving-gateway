@@ -1,10 +1,10 @@
-# 🎓 Giáo Trình Thực Hành 3 Nấc: Từ Docker đến API Gateway & K8s
+# 🎓 Giáo Trình Thực Hành 4 Nấc: Từ Docker, API Gateway, K8s đến Giám Sát (Observability)
 
-Dự án này được thiết kế để bạn học từ gốc rễ đến nâng cao theo **3 Nấc thang**. Bạn sẽ không bị ngợp vì mỗi nấc giải quyết một bài toán duy nhất.
+Dự án này được thiết kế để bạn học từ gốc rễ đến nâng cao theo **4 Nấc thang**. Bạn sẽ không bị ngợp vì mỗi nấc giải quyết một bài toán duy nhất.
 
 ---
 
-## 🎯 BẢN ĐỒ 3 NẤC HỌC TẬP
+## 🎯 BẢN ĐỒ 4 NẤC HỌC TẬP
 
 ```
 [ NẤC 1: DOCKER & BACKEND API ]
@@ -24,6 +24,13 @@ Dự án này được thiết kế để bạn học từ gốc rễ đến nâ
 [ NẤC 3: KUBERNETES & CI/CD (GITHUB ACTIONS) ]
   👉 Học: Chuyển NGINX thành Ingress Controller, FastAPI thành Deployment & Pods.
   👉 Tự động co giãn (HPA) và tự động build & deploy khi `git push`.
+
+            │ (Mở rộng Observability trên Docker Compose — nhẹ máy, chuẩn kiến trúc thực tế)
+            ▼
+[ NẤC 4: GIÁM SÁT (METRICS), LOGGING & CẢNH BÁO (PLG + ALERTMANAGER) ]
+  👉 Học: Prometheus + Alertmanager + Loki + Promtail + Grafana tách riêng file `docker-compose.monitoring.yml`.
+  👉 Theo dõi tổng quan (req/s, latency p95, tỉ lệ lỗi) & soi chi tiết log NGINX + FastAPI bằng LogQL.
+  👉 Kiểm thử quy tắc cảnh báo (Alert Rules) thực tế khi API gặp sự cố.
 ```
 
 ---
@@ -705,4 +712,134 @@ kubectl delete namespace analytics
 
 # Dừng cụm Minikube
 minikube stop
+```
+
+---
+
+# 📊 NẤC 4: Giám Sát (Metrics), Ghi Log Tập Trung (Loki) & Cảnh Báo (Alertmanager) trên Docker Compose
+
+### 1. Kiến trúc & Triết lý tách file (Chuẩn thực tế)
+
+Thay vì nhồi toàn bộ công cụ giám sát vào `docker-compose.yml` của ứng dụng, ta tách riêng thành **`docker-compose.monitoring.yml`** và kết nối chung vào mạng `analytics_net`:
+
+```
+  [ api_gateway (NGINX) ] ─── stdout/stderr logs ───┐
+                                                    ▼
+  [ api_service (FastAPI) ] ── stdout/stderr logs ─► [ Promtail ] ── push ──► [ Loki (:3100) ]
+            │                                                                       │
+            └── GET /metrics (15s/lần) ──► [ Prometheus (:9090) ]                   │
+                                                    │        │                      │
+                                     (Alert Rules)  │        └───────┐      ┌───────┘
+                                                    ▼                ▼      ▼
+                                        [ Alertmanager (:9093) ]   [ Grafana (:3000) ]
+```
+
+**Cấu trúc thư mục cấu hình (`monitoring/`):**
+- `monitoring/prometheus/prometheus.yml`: Khai báo target cần scrape (`api_service:8000/metrics`) và kết nối Alertmanager.
+- `monitoring/prometheus/alert_rules.yml`: Các luật cảnh báo (`AnalyticsApiDown`, `AnalyticsApiHighErrorRate`, `AnalyticsApiHighLatency`).
+- `monitoring/alertmanager/alertmanager.yml`: Luật gom nhóm và định tuyến cảnh báo (receiver).
+- `monitoring/loki/loki-config.yaml`: Cấu hình lưu trữ log trên filesystem (schema v13, retention mặc định `168h` = 7 ngày; muốn 3 tháng chỉ cần đổi thành `2160h`).
+- `monitoring/promtail/promtail-config.yaml`: Tự động phát hiện các Docker container của dự án qua `/var/run/docker.sock`, gắn nhãn `service`, `container` và đẩy log về Loki.
+- `monitoring/grafana/provisioning/`: Tự động khai báo sẵn 2 datasource (**Prometheus** & **Loki**) và nạp sẵn Dashboard **Analytics Serving Gateway - Overview & Logs**.
+
+---
+
+### 2. Khởi động hệ thống App + Monitoring
+
+> **Lưu ý:** Nếu trước đó bạn có bật Minikube, hãy tắt (`minikube stop`) để giải phóng RAM cho máy.
+
+```bash
+# Chạy đồng thời App (ClickHouse + FastAPI + NGINX) và bộ Giám sát (5 container)
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --build
+
+# Kiểm tra toàn bộ 8 container đang chạy
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml ps
+```
+
+**Danh sách giao diện web:**
+| Công cụ | URL | Tài khoản |
+| :--- | :--- | :--- |
+| **Grafana** (Dashboard & Xem Log) | http://localhost:3000 | `admin` / `admin` |
+| **Prometheus** (Targets, PromQL, Alerts) | http://localhost:9090 | Không cần |
+| **Alertmanager** (Danh sách cảnh báo đang bắn) | http://localhost:9093 | Không cần |
+| **FastAPI Metrics thô** | http://localhost:8000/metrics | Không cần |
+
+---
+
+### 3. Thực hành 1: Tạo lưu lượng & Xem Metrics tổng quan trên Grafana
+
+1. Bắn vài request hợp lệ và vài request sai chữ ký (tạo lỗi `401`/`404`) vào API Gateway để có dữ liệu:
+   ```bash
+   # Request hợp lệ (200 OK)
+   for i in {1..5}; do
+     NOW=$(date +%s)
+     TOKEN=$(echo -n "key_user_a${NOW}" | sha256sum | awk '{print $1}')
+     curl -s -o /dev/null -w "200-test: %{http_code}\n" \
+       -H "Timestamp: ${NOW}" \
+       -H "Authorization: Bearer ${TOKEN}" \
+       "http://localhost:8080/api/v1/sales/daily?days=7"
+   done
+
+   # Request sai token (401 Unauthorized) để thấy biểu đồ lỗi tăng lên
+   for i in {1..3}; do
+     curl -s -o /dev/null -w "401-test: %{http_code}\n" \
+       "http://localhost:8080/api/v1/sales/daily?days=7"
+   done
+   ```
+2. Mở **Grafana** tại http://localhost:3000 → đăng nhập `admin` / `admin`.
+3. Vào **Dashboards → Analytics Gateway → Analytics Serving Gateway - Overview & Logs**.
+4. Quan sát các biểu đồ cập nhật realtime:
+   - **API Status**: `UP` (xanh lá)
+   - **Request Rate (req/s)** phân tách theo từng endpoint (`/api/v1/sales/daily`) và mã trạng thái (`200`, `401`)
+   - **Latency Percentiles (p50 / p95)**
+   - **Live Logs** ở bảng dưới cùng hiển thị trực tiếp log từ `api_service` và `api_gateway`.
+
+---
+
+### 4. Thực hành 2: Soi log chi tiết bằng LogQL (Loki)
+
+Trên Grafana, vào menu **Explore** (biểu tượng la bàn) → chọn Data source là **Loki**, thử các câu truy vấn sau:
+
+```logql
+# Xem toàn bộ log của FastAPI (api_service)
+{service="api_service"}
+
+# Xem toàn bộ log của NGINX API Gateway (api_gateway)
+{service="api_gateway"}
+
+# Lọc các dòng log có lỗi 401 hoặc 500 trên cả API và Gateway
+{service=~"api_service|api_gateway"} |~ " 401 | 500 |ERROR"
+
+# Đếm số dòng log lỗi mỗi phút theo từng service (biến Log thành Metric!)
+sum by (service) (rate({service=~"api_service|api_gateway"} |= "401" [1m]))
+```
+
+---
+
+### 5. Thực hành 3: Kiểm thử Cảnh báo (Prometheus → Alertmanager)
+
+1. Mở http://localhost:9090/alerts để xem 3 quy tắc đang ở trạng thái **Inactive** (xanh).
+2. Giả lập sự cố **API bị sập** bằng cách tắt container `api_service`:
+   ```bash
+   docker stop analytics_api
+   ```
+3. Đợi ~30–45 giây, reload http://localhost:9090/alerts:
+   - `AnalyticsApiDown` chuyển từ **Inactive** → **Pending** (vàng) → **Firing** (đỏ).
+4. Mở **Alertmanager** tại http://localhost:9093 → bạn sẽ thấy cảnh báo `AnalyticsApiDown` đã được gửi sang và gom nhóm sẵn sàng đẩy ra Slack/Telegram/Email.
+5. Khôi phục lại API:
+   ```bash
+   docker start analytics_api
+   ```
+   Sau ~15–30 giây, cảnh báo sẽ tự động chuyển về trạng thái đã xử lý (Resolved).
+
+---
+
+### 6. Dọn dẹp sau khi thực hành
+
+```bash
+# Dừng toàn bộ cả App và Monitoring (giữ nguyên dữ liệu volume)
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
+
+# Hoặc nếu chỉ muốn dừng riêng bộ Monitoring, giữ App chạy bình thường:
+docker stop monitoring_prometheus monitoring_alertmanager monitoring_loki monitoring_promtail monitoring_grafana
 ```

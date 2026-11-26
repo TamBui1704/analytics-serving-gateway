@@ -1,0 +1,121 @@
+# ============================================================
+# DOCKER COMPOSE MONITORING STACK (PLG + ALERTMANAGER)
+# ============================================================
+# Tách riêng khỏi docker-compose.yml (best practice thực tế):
+#   - Chạy app bình thường:
+#       docker compose up -d
+#   - Chạy app + toàn bộ hệ thống giám sát & logging:
+#       docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --build
+#
+# Giao diện truy cập:
+#   - Grafana      : http://localhost:3000  (admin / admin)
+#   - Prometheus   : http://localhost:9090
+#   - Alertmanager : http://localhost:9093
+#   - Loki API     : http://localhost:3100/ready
+# ============================================================
+
+services:
+  # Ghi đè WORKERS=1 khi chạy kèm monitoring để bộ đếm /metrics của Prometheus chính xác trên 1 process
+  api_service:
+    environment:
+      WORKERS: 1
+
+  # ── 1. PROMETHEUS (Thu thập & lưu trữ Metrics + đánh giá Alert Rules) ──
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: monitoring_prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+      - "--enable-feature=created-timestamp-zero-ingestion"
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - api_service
+      - alertmanager
+    networks:
+      - analytics_net
+    restart: unless-stopped
+
+  # ── 2. ALERTMANAGER (Gom nhóm & định tuyến cảnh báo từ Prometheus) ─────
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: monitoring_alertmanager
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    networks:
+      - analytics_net
+    restart: unless-stopped
+
+  # ── 3. LOKI (Lưu trữ & truy vấn Log tập trung theo nhãn - LogQL) ───────
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: monitoring_loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./monitoring/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - analytics_net
+    restart: unless-stopped
+
+  # ── 4. PROMTAIL (Agent gom log từ các Docker container đẩy về Loki) ────
+  promtail:
+    image: grafana/promtail:3.2.1
+    container_name: monitoring_promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./monitoring/promtail/promtail-config.yaml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks:
+      - analytics_net
+    restart: unless-stopped
+
+  # ── 5. GRAFANA (Giao diện Dashboard Metrics & Explore Logs) ────────────
+  grafana:
+    image: grafana/grafana:11.5.0
+    container_name: monitoring_grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - analytics_net
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+    driver: local
+  loki_data:
+    driver: local
+  grafana_data:
+    driver: local
+

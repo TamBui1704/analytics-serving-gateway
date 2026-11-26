@@ -21,11 +21,11 @@ services:
     image: clickhouse/clickhouse-server:24.8-alpine
     container_name: analytics_clickhouse
     ports:
-      - "8123:8123"   # Mở port cho cả máy host và Minikube (host.minikube.internal) gọi vào
+      - "127.0.0.1:8123:8123"   # Chỉ bind về localhost (không mở DB ra mạng ngoài)
     environment:
       CLICKHOUSE_DB: analytics
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-analytics_strong_pass_2026}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - clickhouse_data:/var/lib/clickhouse
@@ -50,12 +50,12 @@ services:
     environment:
       CLICKHOUSE_HOST: clickhouse   # Tên service của ClickHouse trong Docker network
       CLICKHOUSE_PORT: 8123
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-analytics_strong_pass_2026}
       CLICKHOUSE_DB: analytics
-      # Phân quyền danh sách Key theo từng Service riêng biệt (Phương án A)
-      ANALYTICS_API_KEYS: "key_user_a,key_user_vip,demo-key-123"
-      BRANDING_API_KEYS: "key_user_b,key_user_vip"
+      # Phân quyền danh sách Key theo từng Service riêng biệt (ưu tiên đọc từ .env)
+      ANALYTICS_API_KEYS: ${ANALYTICS_API_KEYS:-key_user_a,key_user_vip,demo-key-123}
+      BRANDING_API_KEYS: ${BRANDING_API_KEYS:-key_user_b,key_user_vip}
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,https://analytics.local:8443,https://branding.local:8443"
       WORKERS: 2                    # Chạy local: 2 process Uvicorn (image mặc định = 1 cho K8s)
     depends_on:

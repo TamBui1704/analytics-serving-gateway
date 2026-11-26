@@ -29,6 +29,13 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
     nginx.ingress.kubernetes.io/proxy-body-size: "1m"
 
+    # ── BẢO MẬT (P0): Chặn truy cập /metrics từ bên ngoài Ingress ─────────────
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location = /metrics {
+        deny all;
+        return 403;
+      }
+
 spec:
   # Chỉ định IngressClass (chuẩn K8s hiện đại >= 1.18)
   ingressClassName: nginx

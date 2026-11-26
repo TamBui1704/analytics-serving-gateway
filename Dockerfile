@@ -50,4 +50,5 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
 
 # `sh -c` lets us expand ${PORT}/${WORKERS}; `exec` replaces the shell so
 # Uvicorn becomes PID 1 and receives SIGTERM directly (graceful shutdown).
-CMD ["sh", "-c", "exec uvicorn api_app.main:app --host 0.0.0.0 --port ${PORT} --workers ${WORKERS}"]
+# --no-access-log tắt access log trùng lặp của Uvicorn (đã có middleware log_requests chuẩn trong main.py).
+CMD ["sh", "-c", "exec uvicorn api_app.main:app --host 0.0.0.0 --port ${PORT} --workers ${WORKERS} --no-access-log"]

@@ -34,6 +34,10 @@ k8s/secret.yaml
 # Gateway sensitive configuration
 gateway/certs/
 
+# Monitoring sensitive files (Telegram Bot Token / Chat ID)
+monitoring/alertmanager/alertmanager.yml
+!monitoring/alertmanager/alertmanager.yml.example
+
 # IDE
 .vscode/
 .idea/

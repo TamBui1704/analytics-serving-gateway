@@ -39,10 +39,9 @@ spec:
 
       containers:
         - name: api
-          # Image built & pushed by GitHub Actions CI/CD
-          # Format: ghcr.io/<GITHUB_USER>/analytics-serving-gateway:<tag>
-          image: ghcr.io/tambui1704/analytics-serving-gateway:latest
-          imagePullPolicy: Always
+          # Image built & pushed by GitHub Actions CI/CD (pin version tag, KHÔNG dùng :latest trên Production)
+          image: ghcr.io/tambui1704/analytics-serving-gateway:v2.1.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
               name: http

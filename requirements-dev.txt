@@ -1,0 +1,5 @@
+# Development & QA testing dependencies (KHÔNG đóng gói vào Docker image Production)
+-r api_app/requirements.txt
+httpx==0.28.0
+pytest==8.3.3
+

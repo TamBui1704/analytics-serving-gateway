@@ -25,4 +25,21 @@ spec:
       protocol: TCP
       port: 80                  # Service port (what Ingress calls)
       targetPort: 8000          # Container port (what FastAPI listens on)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: branding-api-svc
+  namespace: analytics
+  labels:
+    app: analytics-api
+spec:
+  type: ClusterIP
+  selector:
+    app: analytics-api
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8000
 
