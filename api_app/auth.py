@@ -32,8 +32,8 @@ TIMESTAMP_TOLERANCE_SECONDS = 60.0
 
 def compute_hmac_signature(secret_key: str, method: str, path: str, timestamp: str) -> str:
     """Tính chữ ký HMAC-SHA256 gắn chặt với HTTP method, path và timestamp."""
-    canonical = f"{method.upper()}:{path}:{timestamp}".encode("utf-8")
-    return hmac.new(secret_key.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+    canonical = f"{method.upper()}:{path}:{timestamp}".encode()
+    return hmac.new(secret_key.encode(), canonical, hashlib.sha256).hexdigest()
 
 
 def get_service_keys(env_var: str) -> set[str]:
@@ -119,7 +119,7 @@ def require_service_auth(service_name: str, env_var: str):
             expected = compute_hmac_signature(secret_key, method, path, timestamp)
             if secrets.compare_digest(raw_token.lower(), expected.lower()):
                 # Trả fingerprint một chiều (KHÔNG BAO GIỜ cắt hay làm lộ secret_key!)
-                key_fingerprint = hashlib.sha256(secret_key.encode("utf-8")).hexdigest()[:8]
+                key_fingerprint = hashlib.sha256(secret_key.encode()).hexdigest()[:8]
                 return f"client_{service_name}_{key_fingerprint}"
 
         raise HTTPException(

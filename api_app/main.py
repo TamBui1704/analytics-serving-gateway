@@ -76,7 +76,7 @@ def _safe_parse_body(raw_bytes: bytes, mask: bool = False):
         if len(serialized) > MAX_LOG_BODY_LEN:
             return serialized[:MAX_LOG_BODY_LEN] + "... [truncated]"
         return parsed
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         if len(text) > MAX_LOG_BODY_LEN:
             return text[:MAX_LOG_BODY_LEN] + "... [truncated]"
         return text
@@ -185,7 +185,7 @@ async def log_requests(request: Request, call_next):
                 headers=headers,
                 media_type=response.media_type,
             )
-    except Exception:
+    except Exception:  # noqa: BLE001
         status_code = 500
         error_detail = traceback.format_exc()
         err_timestamp = datetime.now(VN_TZ).isoformat(timespec="milliseconds")
